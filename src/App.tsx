@@ -4,7 +4,7 @@ import dayGridPlugin from '@fullcalendar/daygrid'
 import timeGridPlugin from '@fullcalendar/timegrid'
 import interactionPlugin from '@fullcalendar/interaction'
 import koLocale from '@fullcalendar/core/locales/ko'
-import type { DateClickArg, EventClickArg } from '@fullcalendar/core'
+import type { EventClickArg } from '@fullcalendar/core'
 
 type MemberId = 'me' | 'wife' | 'son'
 type EventItem = { id:string; title:string; start:string; end?:string; allDay?:boolean; memberIds:MemberId[]; kind?:'event'|'homework'|'homework-complete'; homeworkId?:string; completed?:boolean; completedAt?:string; location?:string; memo?:string }
@@ -57,7 +57,7 @@ export default function App(){
     return {...e,backgroundColor:color,borderColor:color}
   })
 
-  const addSchedule=(arg:DateClickArg)=>{
+  const addSchedule=(arg:any)=>{
     const start=new Date(arg.date); const end=new Date(start.getTime()+60*60000)
     setModal({id:uid(),title:'',start:dateTime(start),end:dateTime(end),memberIds:[],allDay:false,kind:'event'})
   }

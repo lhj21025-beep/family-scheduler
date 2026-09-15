@@ -9,8 +9,8 @@ import { collection, deleteDoc, doc, onSnapshot, query, setDoc, updateDoc, where
 import { onAuthStateChanged, signInAnonymously, signOut, type User } from 'firebase/auth'
 import { auth, db, firebaseEnabled } from './firebase'
 
-type MemberId = 'me' | 'wife' | 'son'
-type ViewMode = 'dayGridMonth' | 'timeGridWeek' | 'timeGridDay'
+type MemberId = 'me'|'wife'|'son'
+type ViewMode = 'dayGridMonth'|'timeGridWeek'|'timeGridDay'
 type FamilyEvent = { id:string; familyId:string; memberIds:MemberId[]; title:string; start:string; end?:string; allDay?:boolean; location?:string; memo?:string; notification?:number; recurrence?:{type:string}; kind?:'event'|'homework'|'homework-complete'; homeworkId?:string; completed?:boolean; completedAt?:string }
 type Profile = { familyId:string; memberId:MemberId; name:string }
 type Homework = { id:string; name:string }
@@ -21,10 +21,10 @@ const members = [
   { id:'son' as MemberId, label:'강천', icon:'👦', color:'#34a853' },
 ]
 const defaultHomework:Homework[] = [
-  {id:'eli-english',name:'엘리하이(영어)'}, {id:'eli-math',name:'엘리하이(수학)'},
-  {id:'eli-science',name:'엘리하이(과학)'}, {id:'eli-social',name:'엘리하이(사회)'},
-  {id:'eli-korean',name:'엘리하이(국어)'}, {id:'hanja',name:'한자'},
-  {id:'math-calc',name:'수학 연산'}, {id:'pretty-writing',name:'예쁜 글씨 쓰기'},
+  {id:'eli-english',name:'엘리하이(영어)'},{id:'eli-math',name:'엘리하이(수학)'},
+  {id:'eli-science',name:'엘리하이(과학)'},{id:'eli-social',name:'엘리하이(사회)'},
+  {id:'eli-korean',name:'엘리하이(국어)'},{id:'hanja',name:'한자'},
+  {id:'math-calc',name:'수학 연산'},{id:'pretty-writing',name:'예쁜 글씨 쓰기'},
   {id:'art',name:'미술학원 숙제'},
 ]
 const demoEvents:FamilyEvent[] = [
@@ -34,11 +34,11 @@ const demoEvents:FamilyEvent[] = [
   {id:'demo-gym',familyId:'demo',memberIds:['me'],title:'헬스',start:'2026-09-10T20:00:00',end:'2026-09-10T21:30:00'},
   {id:'demo-family',familyId:'demo',memberIds:['me','wife','son'],title:'가족 외식',start:'2026-09-10T19:00:00',end:'2026-09-10T20:00:00'},
 ]
-const localDT = (v:Date|string) => { const d=typeof v==='string'?new Date(v):v; const p=(n:number)=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}` }
-const localDate = (v:Date|string) => { const d=typeof v==='string'?new Date(v):v; const p=(n:number)=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}` }
-const makeId = () => typeof crypto!=='undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `event-${Date.now()}-${Math.random().toString(36).slice(2)}`
-const normalize = (id:string,d:any):FamilyEvent => ({id,familyId:d.familyId??'family-default',memberIds:Array.isArray(d.memberIds)&&d.memberIds.length?d.memberIds:d.memberId?[d.memberId]:[],title:d.title??'',start:d.start??'',end:d.end,allDay:d.allDay??false,location:d.location??'',memo:d.memo??'',notification:d.notification??0,recurrence:d.recurrence,kind:d.kind??'event',homeworkId:d.homeworkId,completed:d.completed??false,completedAt:d.completedAt})
-const sortHomework = (list:Homework[]) => [...list].sort((a,b)=>a.name.localeCompare(b.name,'ko'))
+const localDT=(v:Date|string)=>{const d=typeof v==='string'?new Date(v):v;const p=(n:number)=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`}
+const localDate=(v:Date|string)=>{const d=typeof v==='string'?new Date(v):v;const p=(n:number)=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`}
+const makeId=()=>typeof crypto!=='undefined'&&'randomUUID'in crypto?crypto.randomUUID():`event-${Date.now()}-${Math.random().toString(36).slice(2)}`
+const normalize=(id:string,d:any):FamilyEvent=>({id,familyId:d.familyId??'family-default',memberIds:Array.isArray(d.memberIds)&&d.memberIds.length?d.memberIds:d.memberId?[d.memberId]:[],title:d.title??'',start:d.start??'',end:d.end,allDay:d.allDay??false,location:d.location??'',memo:d.memo??'',notification:d.notification??0,recurrence:d.recurrence,kind:d.kind??'event',homeworkId:d.homeworkId,completed:d.completed??false,completedAt:d.completedAt})
+const sortHomework=(list:Homework[])=>[...list].sort((a,b)=>a.name.localeCompare(b.name,'ko'))
 
 function App(){
   const cal=useRef<FullCalendar>(null)
@@ -86,16 +86,7 @@ function App(){
   const simpleLogin=async()=>{const family=loginFamily.trim().toLowerCase().replace(/[^a-z0-9가-힣_-]/g,'');const name=loginName.trim();if(family.length<2)return alert('가족 코드를 2자 이상 입력해주세요.');if(!name)return alert('이름을 입력해주세요.');setLoginBusy(true);try{let u=user;if(firebaseEnabled&&auth&&!u){const r=await signInAnonymously(auth);u=r.user}const p:Profile={familyId:family,memberId:loginMember,name};if(firebaseEnabled&&db&&u){const firestore=db;await setDoc(doc(firestore,'members',u.uid),{...p,uid:u.uid,updatedAt:new Date().toISOString()},{merge:true})}setProfile(p);localStorage.setItem('family-scheduler-profile',JSON.stringify(p));setSelected([loginMember]);flash('로그인되었습니다.')}catch(e){console.error(e);alert('로그인에 실패했습니다. Firebase에서 익명 로그인을 활성화했는지 확인해주세요.')}finally{setLoginBusy(false)}}
   const logout=async()=>{localStorage.removeItem('family-scheduler-profile');setProfile(null);if(firebaseEnabled&&auth)await signOut(auth);setEvents(demoEvents)}
 
-  const registerHomework=async()=>{
-    if(!homeworkIds.length||!homeworkDate)return
-    const selectedHomework=homeworks.filter(h=>homeworkIds.includes(h.id))
-    const newHomework=selectedHomework.filter(h=>!events.some(e=>e.kind==='homework'&&e.homeworkId===h.id&&localDate(e.start)===homeworkDate&&!e.completed))
-    if(!newHomework.length)return alert('선택한 숙제는 해당 날짜에 모두 이미 등록되어 있습니다.')
-    if(newHomework.length<selectedHomework.length)alert('이미 등록된 숙제는 제외하고 등록합니다.')
-    const created:FamilyEvent[]=newHomework.map(h=>({id:makeId(),familyId:profile?.familyId??'family-default',memberIds:['son'],title:`📝 ${h.name}`,start:`${homeworkDate}T00:00:00`,end:`${homeworkDate}T23:59:59`,allDay:true,kind:'homework',homeworkId:h.id,completed:false}))
-    if(firebaseEnabled&&db&&user){const firestore=db;await Promise.all(created.map(e=>setDoc(doc(firestore,'events',e.id),e)))}
-    setEvents(p=>[...p,...created]);setHomeworkOpen(false);setHomeworkIds([]);flash(`${created.length}개 숙제를 등록했습니다.`)
-  }
+  const registerHomework=async()=>{if(!homeworkIds.length||!homeworkDate)return;const selectedHomework=homeworks.filter(h=>homeworkIds.includes(h.id));const newHomework=selectedHomework.filter(h=>!events.some(e=>e.kind==='homework'&&e.homeworkId===h.id&&localDate(e.start)===homeworkDate&&!e.completed));if(!newHomework.length)return alert('선택한 숙제는 해당 날짜에 모두 이미 등록되어 있습니다.');if(newHomework.length<selectedHomework.length)alert('이미 등록된 숙제는 제외하고 등록합니다.');const created:FamilyEvent[]=newHomework.map(h=>({id:makeId(),familyId:profile?.familyId??'family-default',memberIds:['son'],title:`📝 ${h.name}`,start:`${homeworkDate}T00:00:00`,end:`${homeworkDate}T23:59:59`,allDay:true,kind:'homework',homeworkId:h.id,completed:false}));if(firebaseEnabled&&db&&user){const firestore=db;await Promise.all(created.map(e=>setDoc(doc(firestore,'events',e.id),e)))}setEvents(p=>[...p,...created]);setHomeworkOpen(false);setHomeworkIds([]);flash(`${created.length}개 숙제를 등록했습니다.`)}
   const toggleHomework=(id:string)=>setHomeworkIds(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id])
   const completeHomework=async(e:FamilyEvent)=>{if(e.completed)return;const completedAt=new Date();const completedEvent:FamilyEvent={id:makeId(),familyId:profile?.familyId??e.familyId,memberIds:['son'],title:`✅ 숙제 완료 · ${e.title.replace(/^📝\s*/,'')}`,start:localDT(completedAt),end:localDT(new Date(completedAt.getTime()+15*60000)),allDay:false,kind:'homework-complete',homeworkId:e.homeworkId};const next={...e,title:`✅ ${e.title.replace(/^📝\s*/,'')}`,completed:true,completedAt:completedAt.toISOString()};if(firebaseEnabled&&db&&user){const firestore=db;await updateDoc(doc(firestore,'events',e.id),next as any);await setDoc(doc(firestore,'events',completedEvent.id),completedEvent)}setEvents(p=>[...p.map(x=>x.id===e.id?next:x),completedEvent]);setModal(null);flash('숙제를 완료했습니다. 완료 시간이 기록되었습니다.')}
   const addHomework=()=>{const name=homeworkName.trim();if(!name)return;if(homeworks.some(h=>h.name===name))return alert('이미 등록된 숙제입니다.');setHomeworks(p=>sortHomework([...p,{id:makeId(),name}]));setHomeworkName('');flash('숙제 항목을 추가했습니다.')}
@@ -124,18 +115,16 @@ function App(){
 
 function EventModal({event,isNew,onClose,onSave,onDelete,requestNotification,onCompleteHomework}:{event:FamilyEvent|Partial<FamilyEvent>;isNew:boolean;onClose:()=>void;onSave:(e:FamilyEvent)=>void;onDelete:(e:FamilyEvent)=>void;requestNotification:()=>Promise<void>;onCompleteHomework:(e:FamilyEvent)=>void}){
   const [form,setForm]=useState<FamilyEvent>({id:event.id??makeId(),familyId:event.familyId??'family-default',memberIds:Array.isArray(event.memberIds)?event.memberIds:[],title:event.title??'',start:event.start??'',end:event.end??'',allDay:event.allDay??false,location:event.location??'',memo:event.memo??'',notification:event.notification??0,recurrence:event.recurrence,kind:event.kind??'event',homeworkId:event.homeworkId,completed:event.completed??false,completedAt:event.completedAt})
-  const set=(k:keyof FamilyEvent,v:any)=>setForm(p=>({...p,[k]:v}))
+  const set=(k:keyof FamilyEvent,v:any)=>setForm(p=>({...p,[k]:v))
   const toggle=(id:MemberId)=>setForm(p=>({...p,memberIds:p.memberIds.includes(id)?p.memberIds.filter(x=>x!==id):[...p.memberIds,id]}))
   if(form.kind==='homework')return <div className="modal-backdrop" onMouseDown={e=>e.target===e.currentTarget&&onClose()}><div className="modal homework-complete-modal"><div className="modal-header"><h2>📝 숙제 확인</h2><button onClick={onClose}>×</button></div><div className="homework-detail"><div className={form.completed?'homework-status done':'homework-status'}>{form.completed?'✓ 숙제 완료':'□ 숙제 미완료'}</div><h3>{form.title.replace(/^📝\s*/,'').replace(/^✅\s*/,'')}</h3><p>숙제 날짜: {form.start.slice(0,10)}</p>{form.completed&&form.completedAt&&<p>완료 시간: {new Date(form.completedAt).toLocaleString('ko-KR')}</p>}</div><div className="modal-actions">{!form.completed&&<button className="complete-btn" onClick={()=>onCompleteHomework(form)}>✓ 완료</button>}<span/>{!isNew&&<button className="delete-btn" onClick={()=>onDelete(form)}>삭제</button>}<button onClick={onClose}>닫기</button></div></div></div>
   return <div className="modal-backdrop" onMouseDown={e=>e.target===e.currentTarget&&onClose()}><div className="modal"><div className="modal-header"><h2>{isNew?'일정 추가':'일정 수정'}</h2><button onClick={onClose}>×</button></div><label>누구 <span className="field-hint">복수 선택 가능</span><div className="member-picker">{members.map(m=><button type="button" key={m.id} className={form.memberIds.includes(m.id)?'member-chip selected':'member-chip'} onClick={()=>toggle(m.id)}><span style={{background:m.color}}>{m.icon}</span>{m.label}</button>)}</div></label><label>제목<input autoFocus value={form.title} onChange={e=>set('title',e.target.value)} placeholder="예: 수학학원"/></label><div className="form-grid"><label>시작<input type="datetime-local" value={form.start} onChange={e=>set('start',e.target.value)}/></label><label>종료<input type="datetime-local" value={form.end??''} onChange={e=>set('end',e.target.value)}/></label></div><label>반복<select value={form.recurrence?.type??'none'} onChange={e=>set('recurrence',e.target.value==='none'?undefined:{type:e.target.value})}><option value="none">반복 안 함</option><option value="daily">매일</option><option value="weekday">평일</option><option value="weekly">매주</option><option value="monthly">매월</option><option value="yearly">매년</option></select></label><label>알림<select value={form.notification??0} onChange={async e=>{const n=Number(e.target.value);set('notification',n);if(n)await requestNotification()}}><option value="0">알림 없음</option><option value="1">정시</option><option value="5">5분 전</option><option value="10">10분 전</option><option value="30">30분 전</option><option value="60">1시간 전</option><option value="1440">1일 전</option></select></label><label>장소<input value={form.location??''} onChange={e=>set('location',e.target.value)} placeholder="예: OO학원"/></label><label>메모<textarea rows={3} value={form.memo??''} onChange={e=>set('memo',e.target.value)} placeholder="메모를 입력하세요"/></label><div className="modal-actions">{!isNew&&<button className="delete-btn" onClick={()=>onDelete(form)}>삭제</button>}<span/><button onClick={onClose}>취소</button><button className="save-btn" onClick={()=>{if(!form.title.trim())return alert('일정 제목을 입력해주세요.');if(!form.memberIds.length)return alert('최소 한 명을 선택해주세요.');onSave(form)}}>저장</button></div></div></div>
 }
 
 function HomeworkModal({homeworks,homeworkIds,toggleHomework,homeworkDate,setHomeworkDate,onRegister,editingHomework,setEditingHomework,homeworkName,setHomeworkName,onAdd,onUpdate,onDelete,onClose}:{homeworks:Homework[];homeworkIds:string[];toggleHomework:(id:string)=>void;homeworkDate:string;setHomeworkDate:(v:string)=>void;onRegister:()=>void;editingHomework:Homework|null;setEditingHomework:(v:Homework|null)=>void;homeworkName:string;setHomeworkName:(v:string)=>void;onAdd:()=>void;onUpdate:()=>void;onDelete:(h:Homework)=>void;onClose:()=>void}){
+  const [manageOpen,setManageOpen]=useState(false)
   return <div className="modal-backdrop" onMouseDown={e=>e.target===e.currentTarget&&onClose()}><div className="modal homework-modal"><div className="modal-header"><h2>📝 숙제 체크</h2><button onClick={onClose}>×</button></div>
-    <div className="homework-register"><h3>숙제 등록 <span className="field-hint">여러 개 선택 가능</span></h3><div className="homework-card-grid">{homeworks.map(h=><button type="button" key={h.id} className={homeworkIds.includes(h.id)?'homework-card selected':'homework-card'} onClick={()=>toggleHomework(h.id)}><span className="homework-card-check">{homeworkIds.includes(h.id)?'✓':'□'}</span><span>{h.name}</span></button>)}</div><label>날짜<input type="date" value={homeworkDate} onChange={e=>setHomeworkDate(e.target.value)}/></label><button className="save-btn full-btn" disabled={!homeworkIds.length} onClick={onRegister}>＋ 선택한 숙제 {homeworkIds.length?`${homeworkIds.length}개`:''} 등록</button></div>
-    <div className="homework-manage"><h3>숙제 항목 관리 <span>오름차순</span></h3><div className="homework-add-row"><input value={homeworkName} onChange={e=>setHomeworkName(e.target.value)} placeholder={editingHomework?'수정할 숙제 이름':'새 숙제 이름'}/>{editingHomework?<><button onClick={onUpdate}>수정</button><button onClick={()=>{setEditingHomework(null);setHomeworkName('')}}>취소</button></>:<button onClick={onAdd}>＋ 추가</button>}</div><div className="homework-list">{homeworks.map(h=><div className="homework-row" key={h.id}><span>📝 {h.name}</span><div><button onClick={()=>{setEditingHomework(h);setHomeworkName(h.name)}}>수정</button><button className="delete-btn" onClick={()=>onDelete(h)}>삭제</button></div></div>)}</div></div>
-    <div className="modal-actions"><span/><button onClick={onClose}>닫기</button></div>
-  </div></div>
+    <div className="homework-register"><h3>숙제 등록 <span className="field-hint">여러 개 선택 가능</span></h3><div className="homework-card-grid">{homeworks.map(h=><button type="button" key={h.id} className={homeworkIds.includes(h.id)?'homework-card selected':'homework-card'} onClick={()=>toggleHomework(h.id)}><span className="homework-card-check">{homeworkIds.includes(h.id)?'✓':'□'}</span><span>{h.name}</span></button>)}</div><label>날짜<input type="date" value={homeworkDate} onChange={e=>setHomeworkDate(e.target.value)}/></label><div className="homework-modal-actions"><button className="save-btn" disabled={!homeworkIds.length} onClick={onRegister}>＋ 선택한 숙제 {homeworkIds.length?`${homeworkIds.length}개`:''} 등록</button><button type="button" className={manageOpen?'manage-btn active':'manage-btn'} onClick={()=>{setManageOpen(v=>!v);setEditingHomework(null);setHomeworkName('')}}>{manageOpen?'▲ 수정 닫기':'⚙ 숙제 수정'}</button></div></div>
+    {manageOpen&&<div className="homework-manage"><h3>숙제 항목 관리 <span>오름차순</span></h3><div className="homework-add-row"><input value={homeworkName} onChange={e=>setHomeworkName(e.target.value)} placeholder={editingHomework?'수정할 숙제 이름':'새 숙제 이름'} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();editingHomework?onUpdate():onAdd()}}}/>{editingHomework?<><button onClick={onUpdate}>수정</button><button onClick={()=>{setEditingHomework(null);setHomeworkName('')}}>취소</button></>:<button onClick={onAdd}>＋ 추가</button>}</div><div className="homework-list">{homeworks.map(h=><div className="homework-row" key={h.id}><span>{h.name}</span><div><button type="button" onClick={()=>{setEditingHomework(h);setHomeworkName(h.name)}}>수정</button><button type="button" className="delete-btn" onClick={()=>onDelete(h)}>삭제</button></div></div>)}</div></div>}
+    </div></div>
 }
-
-export default App

@@ -52,8 +52,11 @@ export default function App(){
   const visible=useMemo(()=>events.filter(e=>e.memberIds.some(m=>selected.includes(m))),[events,selected])
   const calendarEvents=visible.map(e=>{
     const m=members.find(x=>x.id===e.memberIds[0])??members[0]
-    const gray=e.kind==='homework-complete'||(e.kind==='homework'&&e.completed)
-    const color=gray?'#9aa0a6':m.color
+    const isCompleted=e.kind==='homework-complete'||(e.kind==='homework'&&e.completed)
+    // 숙제 완료 전에는 '학교숙제'가 포함된 숙제를 별도 색상으로 표시하고,
+    // 완료된 숙제는 기존처럼 회색으로 표시한다.
+    const isSchoolHomework=e.kind==='homework' && !e.completed && e.title.includes('학교숙제')
+    const color=isCompleted?'#9aa0a6':isSchoolHomework?'#f29900':m.color
     return {...e,backgroundColor:color,borderColor:color}
   })
 

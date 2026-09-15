@@ -21,11 +21,9 @@ const members = [
   { id:'son' as MemberId, label:'강천', icon:'👦', color:'#34a853' },
 ]
 const defaultHomework:Homework[] = [
-  {id:'eli-english',name:'엘리하이(영어)'},{id:'eli-math',name:'엘리하이(수학)'},
-  {id:'eli-science',name:'엘리하이(과학)'},{id:'eli-social',name:'엘리하이(사회)'},
-  {id:'eli-korean',name:'엘리하이(국어)'},{id:'hanja',name:'한자'},
-  {id:'math-calc',name:'수학 연산'},{id:'pretty-writing',name:'예쁜 글씨 쓰기'},
-  {id:'art',name:'미술학원 숙제'},
+  {id:'eli-english',name:'엘리하이(영어)'},{id:'eli-math',name:'엘리하이(수학)'},{id:'eli-science',name:'엘리하이(과학)'},
+  {id:'eli-social',name:'엘리하이(사회)'},{id:'eli-korean',name:'엘리하이(국어)'},{id:'hanja',name:'한자'},
+  {id:'math-calc',name:'수학 연산'},{id:'pretty-writing',name:'예쁜 글씨 쓰기'},{id:'art',name:'미술학원 숙제'},
 ]
 const demoEvents:FamilyEvent[] = [
   {id:'demo-school',familyId:'demo',memberIds:['son'],title:'학교',start:'2026-09-10T08:50:00',end:'2026-09-10T15:10:00'},
@@ -44,7 +42,7 @@ function App(){
   const cal=useRef<FullCalendar>(null)
   const [view,setView]=useState<ViewMode>('timeGridWeek')
   const [selected,setSelected]=useState<MemberId[]>(['me','wife','son'])
-  const [events,setEvents]=useState<FamilyEvent[]>(demoEvents)
+  const [events,setEvents]=useState<FamilyEvent[]>(()=>{try{const v=localStorage.getItem('family-scheduler-events');return v?JSON.parse(v):demoEvents}catch{return demoEvents}})
   const [modal,setModal]=useState<FamilyEvent|null>(null)
   const [newEvent,setNewEvent]=useState<Partial<FamilyEvent>|null>(null)
   const [notice,setNotice]=useState('')
@@ -66,6 +64,7 @@ function App(){
 
   useEffect(()=>{const s=localStorage.getItem('family-scheduler-members');if(s)try{setSelected(JSON.parse(s))}catch{}},[])
   useEffect(()=>localStorage.setItem('family-scheduler-members',JSON.stringify(selected)),[selected])
+  useEffect(()=>localStorage.setItem('family-scheduler-events',JSON.stringify(events)),[events])
   useEffect(()=>localStorage.setItem('family-scheduler-homeworks',JSON.stringify(homeworks)),[homeworks])
   useEffect(()=>{const t=setInterval(()=>setNow(new Date()),60000);return()=>clearInterval(t)},[])
   useEffect(()=>{if(!firebaseEnabled||!auth){setAuthLoading(false);return}return onAuthStateChanged(auth,u=>{setUser(u);setAuthLoading(false)})},[])
@@ -73,7 +72,7 @@ function App(){
 
   const flash=(s:string)=>{setNotice(s);setTimeout(()=>setNotice(''),1800)}
   const visible=useMemo(()=>events.filter(e=>e.memberIds.some(x=>selected.includes(x))),[events,selected])
-  const fc=visible.map(e=>{const m=members.find(x=>x.id===e.memberIds[0])??members[0];const color=e.kind==='homework-complete'?'#5f6368':m.color;return{id:e.id,title:e.title,start:e.start,end:e.end,allDay:e.allDay,backgroundColor:color,borderColor:color,extendedProps:{icons:e.kind?.startsWith('homework')?'📝':e.memberIds.map(x=>members.find(m=>m.id===x)?.icon).join(''),location:e.location,kind:e.kind,completed:e.completed}}})
+  const fc=visible.map(e=>{const m=members.find(x=>x.id===e.memberIds[0])??members[0];const completed=e.kind==='homework-complete'||(e.kind==='homework'&&e.completed);const color=completed?'#9aa0a6':m.color;return{id:e.id,title:e.title,start:e.start,end:e.end,allDay:e.allDay,backgroundColor:color,borderColor:color,extendedProps:{icons:e.kind?.startsWith('homework')?'📝':e.memberIds.map(x=>members.find(m=>m.id===x)?.icon).join(''),location:e.location,kind:e.kind,completed:e.completed}}})
 
   const save=async(e:FamilyEvent)=>{const d={...e,familyId:profile?.familyId??'family-default',updatedAt:new Date().toISOString()};if(firebaseEnabled&&db&&user){const firestore=db;await setDoc(doc(firestore,'events',e.id),d)}setEvents(p=>p.some(x=>x.id===e.id)?p.map(x=>x.id===e.id?{...e,familyId:d.familyId}:x):[...p,{...e,familyId:d.familyId}]);setModal(null);setNewEvent(null);flash('일정을 저장했습니다.')}
   const remove=async(e:FamilyEvent)=>{if(!confirm(`'${e.title}' 일정을 삭제할까요?`))return;if(firebaseEnabled&&db&&user){const firestore=db;await deleteDoc(doc(firestore,'events',e.id))}setEvents(p=>p.filter(x=>x.id!==e.id));setModal(null);flash('일정을 삭제했습니다.')}
@@ -115,7 +114,7 @@ function App(){
 
 function EventModal({event,isNew,onClose,onSave,onDelete,requestNotification,onCompleteHomework}:{event:FamilyEvent|Partial<FamilyEvent>;isNew:boolean;onClose:()=>void;onSave:(e:FamilyEvent)=>void;onDelete:(e:FamilyEvent)=>void;requestNotification:()=>Promise<void>;onCompleteHomework:(e:FamilyEvent)=>void}){
   const [form,setForm]=useState<FamilyEvent>({id:event.id??makeId(),familyId:event.familyId??'family-default',memberIds:Array.isArray(event.memberIds)?event.memberIds:[],title:event.title??'',start:event.start??'',end:event.end??'',allDay:event.allDay??false,location:event.location??'',memo:event.memo??'',notification:event.notification??0,recurrence:event.recurrence,kind:event.kind??'event',homeworkId:event.homeworkId,completed:event.completed??false,completedAt:event.completedAt})
-  const set=(k:keyof FamilyEvent,v:any)=>setForm(p=>({...p,[k]:v))
+  const set=(k:keyof FamilyEvent,v:any)=>setForm(p=>({...p,[k]:v}))
   const toggle=(id:MemberId)=>setForm(p=>({...p,memberIds:p.memberIds.includes(id)?p.memberIds.filter(x=>x!==id):[...p.memberIds,id]}))
   if(form.kind==='homework')return <div className="modal-backdrop" onMouseDown={e=>e.target===e.currentTarget&&onClose()}><div className="modal homework-complete-modal"><div className="modal-header"><h2>📝 숙제 확인</h2><button onClick={onClose}>×</button></div><div className="homework-detail"><div className={form.completed?'homework-status done':'homework-status'}>{form.completed?'✓ 숙제 완료':'□ 숙제 미완료'}</div><h3>{form.title.replace(/^📝\s*/,'').replace(/^✅\s*/,'')}</h3><p>숙제 날짜: {form.start.slice(0,10)}</p>{form.completed&&form.completedAt&&<p>완료 시간: {new Date(form.completedAt).toLocaleString('ko-KR')}</p>}</div><div className="modal-actions">{!form.completed&&<button className="complete-btn" onClick={()=>onCompleteHomework(form)}>✓ 완료</button>}<span/>{!isNew&&<button className="delete-btn" onClick={()=>onDelete(form)}>삭제</button>}<button onClick={onClose}>닫기</button></div></div></div>
   return <div className="modal-backdrop" onMouseDown={e=>e.target===e.currentTarget&&onClose()}><div className="modal"><div className="modal-header"><h2>{isNew?'일정 추가':'일정 수정'}</h2><button onClick={onClose}>×</button></div><label>누구 <span className="field-hint">복수 선택 가능</span><div className="member-picker">{members.map(m=><button type="button" key={m.id} className={form.memberIds.includes(m.id)?'member-chip selected':'member-chip'} onClick={()=>toggle(m.id)}><span style={{background:m.color}}>{m.icon}</span>{m.label}</button>)}</div></label><label>제목<input autoFocus value={form.title} onChange={e=>set('title',e.target.value)} placeholder="예: 수학학원"/></label><div className="form-grid"><label>시작<input type="datetime-local" value={form.start} onChange={e=>set('start',e.target.value)}/></label><label>종료<input type="datetime-local" value={form.end??''} onChange={e=>set('end',e.target.value)}/></label></div><label>반복<select value={form.recurrence?.type??'none'} onChange={e=>set('recurrence',e.target.value==='none'?undefined:{type:e.target.value})}><option value="none">반복 안 함</option><option value="daily">매일</option><option value="weekday">평일</option><option value="weekly">매주</option><option value="monthly">매월</option><option value="yearly">매년</option></select></label><label>알림<select value={form.notification??0} onChange={async e=>{const n=Number(e.target.value);set('notification',n);if(n)await requestNotification()}}><option value="0">알림 없음</option><option value="1">정시</option><option value="5">5분 전</option><option value="10">10분 전</option><option value="30">30분 전</option><option value="60">1시간 전</option><option value="1440">1일 전</option></select></label><label>장소<input value={form.location??''} onChange={e=>set('location',e.target.value)} placeholder="예: OO학원"/></label><label>메모<textarea rows={3} value={form.memo??''} onChange={e=>set('memo',e.target.value)} placeholder="메모를 입력하세요"/></label><div className="modal-actions">{!isNew&&<button className="delete-btn" onClick={()=>onDelete(form)}>삭제</button>}<span/><button onClick={onClose}>취소</button><button className="save-btn" onClick={()=>{if(!form.title.trim())return alert('일정 제목을 입력해주세요.');if(!form.memberIds.length)return alert('최소 한 명을 선택해주세요.');onSave(form)}}>저장</button></div></div></div>

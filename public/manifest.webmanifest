@@ -1,0 +1,9 @@
+{
+  "name": "우리 가족 스케줄러",
+  "short_name": "가족 스케줄러",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1a73e8",
+  "lang": "ko"
+}

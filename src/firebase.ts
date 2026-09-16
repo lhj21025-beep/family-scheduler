@@ -3,15 +3,15 @@ import { getFirestore } from 'firebase/firestore'
 import { getAuth } from 'firebase/auth'
 
 const config = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: 'AIzaSyBWaY0U1FVizj2qKNxC2brHihGW6E2HMR8',
+  authDomain: 'family-scheduler-44a8e.firebaseapp.com',
+  projectId: 'family-scheduler-44a8e',
+  storageBucket: 'family-scheduler-44a8e.firebasestorage.app',
+  messagingSenderId: '875374000769',
+  appId: '1:875374000769:web:1367592d03c5b7c8c8ab80',
 }
 
-export const firebaseEnabled = Boolean(config.apiKey && config.authDomain && config.projectId && config.appId)
-export const firebaseApp = firebaseEnabled ? initializeApp(config) : null
-export const db = firebaseApp ? getFirestore(firebaseApp) : null
-export const auth = firebaseApp ? getAuth(firebaseApp) : null
+export const firebaseEnabled = true
+export const firebaseApp = initializeApp(config)
+export const db = getFirestore(firebaseApp)
+export const auth = getAuth(firebaseApp)

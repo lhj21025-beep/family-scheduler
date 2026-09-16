@@ -11,6 +11,17 @@ service cloud.firestore {
         ];
     }
 
+    // New low-read storage model: one document per calendar day.
+    match /scheduleDays/{dayId} {
+      allow read, write: if signedInFamily();
+    }
+
+    // Small shared metadata document: homework definitions + recent family notices.
+    match /familyData/{familyId} {
+      allow read, write: if signedInFamily() && familyId == 'family-main';
+    }
+
+    // Legacy collections remain readable/writable for the one-time migration.
     match /events/{eventId} {
       allow read, write: if signedInFamily();
     }

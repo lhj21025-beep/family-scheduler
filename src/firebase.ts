@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app'
-import { getFirestore } from 'firebase/firestore'
 import { getAuth } from 'firebase/auth'
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
 
 const config = {
   apiKey: 'AIzaSyBWaY0U1FVizj2qKNxC2brHihGW6E2HMR8',
@@ -13,5 +13,10 @@ const config = {
 
 export const firebaseEnabled = true
 export const firebaseApp = initializeApp(config)
-export const db = getFirestore(firebaseApp)
+
+// IndexedDB local cache reduces unnecessary re-downloads when reopening or
+// navigating around data that is already cached on this device.
+export const db = initializeFirestore(firebaseApp, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+})
 export const auth = getAuth(firebaseApp)

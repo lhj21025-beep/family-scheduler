@@ -1,27 +1,30 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() {
-      return request.auth != null;
-    }
-
-    function myFamilyId() {
-      return get(/databases/$(database)/documents/members/$(request.auth.uid)).data.familyId;
-    }
-
-    match /members/{memberId} {
-      allow read, write: if signedIn() && request.auth.uid == memberId;
+    function signedInFamily() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in [
+          'dad@family-scheduler.app',
+          'mom@family-scheduler.app',
+          'son@family-scheduler.app'
+        ];
     }
 
     match /events/{eventId} {
-      allow read: if signedIn() && myFamilyId() == resource.data.familyId;
-      allow create: if signedIn() && myFamilyId() == request.resource.data.familyId;
-      allow update: if signedIn() && myFamilyId() == resource.data.familyId && myFamilyId() == request.resource.data.familyId;
-      allow delete: if signedIn() && myFamilyId() == resource.data.familyId;
+      allow read, write: if signedInFamily();
+    }
+
+    match /homeworks/{homeworkId} {
+      allow read, write: if signedInFamily();
+    }
+
+    match /members/{memberId} {
+      allow read, write: if signedInFamily() && request.auth.uid == memberId;
     }
 
     match /families/{familyId} {
-      allow read, write: if signedIn();
+      allow read, write: if signedInFamily();
     }
   }
 }

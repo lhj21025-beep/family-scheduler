@@ -1,5 +1,5 @@
 const CACHE='family-scheduler-v3'
-self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE).then(c=>c.addAll(['./','./manifest.webmanifest']));self.skipWaiting()})
+self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE).then(c=>c.addAll(['./','./manifest.webmanifest'])));self.skipWaiting()})
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())))
 self.addEventListener('fetch',event=>{if(event.request.method!=='GET')return;event.respondWith(fetch(event.request).then(r=>{const copy=r.clone();caches.open(CACHE).then(c=>c.put(event.request,copy));return r}).catch(()=>caches.match(event.request)))})
 self.addEventListener('push',event=>{let raw={};try{raw=event.data?.json()??{}}catch{};const notification=raw.notification??raw;const data=raw.data??{};const title=notification.title??data.title??'우리 가족 스케줄러';const body=notification.body??data.body??'새로운 가족 알림이 있습니다.';const icon=notification.icon??'./favicon.svg';const link=data.link??notification.click_action??'./';event.waitUntil(self.registration.showNotification(title,{body,icon,badge:icon,data:{link}}))})

@@ -14,7 +14,7 @@ type EventItem={id:string;title:string;start:string;end?:string;allDay?:boolean;
 type Homework={id:string;name:string;familyId?:string}
 const FAMILY_ID='family-main'
 const members=[{id:'me' as MemberId,label:'아빠',icon:'👨',color:'#4285f4'},{id:'wife' as MemberId,label:'엄마',icon:'👩',color:'#9c6ade'},{id:'son' as MemberId,label:'강천',icon:'👦',color:'#34a853'}]
-const accountMemberByEmail:Record<string,MemberId>={'dad@family-scheduler.app':'me','mom@family-scheduler.app':'wife@family-scheduler.app' as never,'son@family-scheduler.app':'son'}
+const accountMemberByEmail:Record<string,MemberId>={'dad@family-scheduler.app':'me','mom@family-scheduler.app':'wife','son@family-scheduler.app':'son'}
 const homeworkDefaults:Homework[]=[{id:'eli-english',name:'엘리하이(영어)'},{id:'eli-math',name:'엘리하이(수학)'},{id:'eli-science',name:'엘리하이(과학)'},{id:'eli-social',name:'엘리하이(사회)'},{id:'eli-korean',name:'엘리하이(국어)'},{id:'hanja',name:'한자'},{id:'math-calc',name:'수학 연산'},{id:'pretty-writing',name:'예쁜 글씨 쓰기'},{id:'art',name:'미술학원 숙제'}]
 const pad=(n:number)=>String(n).padStart(2,'0')
 const dateKey=(d:Date)=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
@@ -30,35 +30,9 @@ export default function App(){
  const [dataLoading,setDataLoading]=useState(true)
  const [syncError,setSyncError]=useState('')
  const [homeworkOpen,setHomeworkOpen]=useState(false),[manageOpen,setManageOpen]=useState(false),[homeworkDate,setHomeworkDate]=useState(dateKey(new Date())),[homeworkIds,setHomeworkIds]=useState<string[]>([]),[homeworkName,setHomeworkName]=useState(''),[editing,setEditing]=useState<Homework|null>(null),[modal,setModal]=useState<EventItem|null>(null),[notice,setNotice]=useState(''),[search,setSearch]=useState(''),[todayOpen,setTodayOpen]=useState(false)
-
  useEffect(()=>localStorage.setItem('family-scheduler-members',JSON.stringify(selected)),[selected])
-
- // 일정은 이제 기기별 localStorage가 아니라 Firestore만 사용합니다.
- useEffect(()=>{
-   if(!auth.currentUser)return
-   setDataLoading(true);setSyncError('')
-   const q=query(collection(db,'events'))
-   return onSnapshot(q,snapshot=>{
-     const rows=snapshot.docs.map(d=>d.data() as EventItem).filter(e=>e.familyId===FAMILY_ID)
-     rows.sort((a,b)=>a.start.localeCompare(b.start))
-     setEvents(rows);setDataLoading(false)
-   },error=>{console.error(error);setSyncError('Firebase 일정 동기화에 실패했습니다. Firestore 보안 규칙을 확인해주세요.');setDataLoading(false)})
- },[])
-
- // 숙제 항목도 가족 전체에서 공유합니다.
- useEffect(()=>{
-   if(!auth.currentUser)return
-   const q=query(collection(db,'homeworks'))
-   return onSnapshot(q,async snapshot=>{
-     const rows=snapshot.docs.map(d=>d.data() as Homework).filter(h=>h.familyId===FAMILY_ID)
-     if(rows.length===0){
-       const batch=writeBatch(db)
-       homeworkDefaults.forEach(h=>batch.set(doc(db,'homeworks',h.id),{...h,familyId:FAMILY_ID}))
-       try{await batch.commit()}catch(error){console.error(error)}
-     }else setHomeworks(rows.sort((a,b)=>a.name.localeCompare(b.name,'ko')))
-   },error=>{console.error(error);setSyncError('Firebase 숙제 동기화에 실패했습니다.')})
- },[])
-
+ useEffect(()=>{if(!auth.currentUser)return;setDataLoading(true);setSyncError('');const q=query(collection(db,'events'));return onSnapshot(q,snapshot=>{const rows=snapshot.docs.map(d=>d.data() as EventItem).filter(e=>e.familyId===FAMILY_ID);rows.sort((a,b)=>a.start.localeCompare(b.start));setEvents(rows);setDataLoading(false)},error=>{console.error(error);setSyncError('Firebase 일정 동기화에 실패했습니다. Firestore 보안 규칙을 확인해주세요.');setDataLoading(false)})},[])
+ useEffect(()=>{if(!auth.currentUser)return;const q=query(collection(db,'homeworks'));return onSnapshot(q,async snapshot=>{const rows=snapshot.docs.map(d=>d.data() as Homework).filter(h=>h.familyId===FAMILY_ID);if(rows.length===0){const batch=writeBatch(db);homeworkDefaults.forEach(h=>batch.set(doc(db,'homeworks',h.id),{...h,familyId:FAMILY_ID}));try{await batch.commit()}catch(error){console.error(error)}}else setHomeworks(rows.sort((a,b)=>a.name.localeCompare(b.name,'ko')))},error=>{console.error(error);setSyncError('Firebase 숙제 동기화에 실패했습니다.')})},[])
  const flash=(s:string)=>{setNotice(s);setTimeout(()=>setNotice(''),1800)}
  const visible=useMemo(()=>events.filter(e=>e.memberIds.some(m=>selected.includes(m))&&(!search.trim()||`${e.title} ${e.location??''} ${e.memo??''}`.toLowerCase().includes(search.trim().toLowerCase()))),[events,selected,search])
  const calendarEvents=visible.map(e=>{const m=members.find(x=>x.id===e.memberIds[0])??members[0];const done=e.kind==='homework-complete'||(e.kind==='homework'&&e.completed);const school=e.kind==='homework'&&!e.completed&&e.title.includes('학교숙제');const color=done?'#9aa0a6':school?'#f29900':m.color;return {...e,backgroundColor:color,borderColor:color}})
@@ -76,7 +50,6 @@ export default function App(){
  const updateHomework=async()=>{if(!editing)return;const n=homeworkName.trim();if(!n)return;try{await setDoc(doc(db,'homeworks',editing.id),{...editing,name:n,familyId:FAMILY_ID});setEditing(null);setHomeworkName('')}catch(error){console.error(error);alert('숙제 수정에 실패했습니다.')}}
  const deleteHomework=async(h:Homework)=>{if(!confirm(`'${h.name}' 숙제 항목을 삭제할까요?`))return;try{await deleteDoc(doc(db,'homeworks',h.id));setHomeworkIds(p=>p.filter(x=>x!==h.id))}catch(error){console.error(error);alert('숙제 삭제에 실패했습니다.')}}
  const today=dateKey(new Date());const todayEvents=events.filter(e=>e.start.slice(0,10)===today&&e.kind!=='homework-complete'&&e.memberIds.some(m=>selected.includes(m))).sort((a,b)=>a.start.localeCompare(b.start));const todayHomework=events.filter(e=>e.start.slice(0,10)===today&&e.kind==='homework')
-
  return <div className="app-shell"><header className="topbar"><div className="brand"><span>📅</span><strong>우리 가족 스케줄러</strong></div><div className="top-actions"><button className="today-summary-btn" onClick={()=>setTodayOpen(p=>!p)}>📌 오늘</button><button className="homework-btn" onClick={()=>{setHomeworkDate(today);setHomeworkIds([]);setManageOpen(false);setHomeworkOpen(true)}}>📝 숙제 체크</button><button className="add-btn" onClick={()=>setModal({id:uid(),title:'',start:dateTime(new Date()),end:dateTime(new Date(Date.now()+3600000)),memberIds:currentMember?[currentMember]:['me'],kind:'event',repeat:'none'})}>＋ 일정 추가</button></div></header><div className="toolbar"><div className="filters"><strong>가족</strong>{members.map(m=><label className="member-filter" key={m.id}><input type="checkbox" checked={selected.includes(m.id)} onChange={()=>setSelected(p=>p.includes(m.id)?p.filter(x=>x!==m.id):[...p,m.id])}/><span style={{color:m.color}}>{m.icon} {m.label}</span></label>)}</div><div className="search-box">🔍<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="일정 검색"/><button onClick={()=>setSearch('')}>×</button></div></div>{(dataLoading||syncError)&&<div style={{padding:'7px 14px',background:syncError?'#fff1f1':'#eef6ff',color:syncError?'#c62828':'#2767a8',fontSize:13,textAlign:'center'}}>{dataLoading?'☁️ Firebase에서 가족 일정을 불러오는 중...':`⚠️ ${syncError}`}</div>}<main className="calendar-wrap"><FullCalendar plugins={[dayGridPlugin,timeGridPlugin,interactionPlugin]} initialView="timeGridWeek" locale={koLocale} height="calc(100vh - 150px)" headerToolbar={{left:'prev,next today',center:'title',right:'dayGridMonth,timeGridWeek,timeGridDay'}} buttonText={{today:'오늘',month:'월',week:'주',day:'일'}} events={calendarEvents} editable selectable dateClick={addSchedule} eventClick={clickEvent} eventDrop={eventDrop} eventResize={eventResize} nowIndicator allDaySlot weekends={true}/></main>
  {todayOpen&&<div className="today-panel"><div className="today-head"><h2>📌 오늘의 가족 일정</h2><button onClick={()=>setTodayOpen(false)}>×</button></div><div className="today-columns">{members.filter(m=>selected.includes(m.id)).map(m=><section key={m.id}><h3 style={{color:m.color}}>{m.icon} {m.label}</h3>{todayEvents.filter(e=>e.memberIds.includes(m.id)).map(e=><button className="today-item" key={e.id} onClick={()=>{setTodayOpen(false);setModal(e)}}><b>{e.start.slice(11,16)}</b><span>{e.title}</span></button>)}{!todayEvents.some(e=>e.memberIds.includes(m.id))&&<small>오늘 일정 없음</small>}</section>)}</div><div className="today-homework"><b>📝 오늘 숙제</b><span>{todayHomework.length?`${todayHomework.filter(x=>x.completed).length}/${todayHomework.length} 완료`:'등록된 숙제 없음'}</span></div></div>}
  {notice&&<div className="toast">✓ {notice}</div>}

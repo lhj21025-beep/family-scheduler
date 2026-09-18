@@ -193,9 +193,10 @@ export default function App(){
   const completeHomework=async(e:EventItem)=>{
    if(e.completed)return;
    const now=new Date();
-   const startDate=e.homeworkStartDate??e.start.slice(0,10);
-   const endDate=e.homeworkEndDate??e.start.slice(0,10);
-   const dates=dateRange(startDate,endDate);
+   const clickedDate=e.start.slice(0,10);
+   const startDate=e.homeworkStartDate??clickedDate;
+   const endDate=e.homeworkEndDate??clickedDate;
+   const dates=[...new Set([...dateRange(startDate,endDate),clickedDate])];
    try{
      const snaps=await Promise.all(dates.map(d=>getDoc(doc(db,'scheduleDays',dayId(d)))));
      const batch=writeBatch(db);
@@ -205,7 +206,11 @@ export default function App(){
        if(!s.exists())return;
        const data=s.data() as DayDoc;
        Object.values(data.events??{}).forEach(x=>{
-         if(x.kind==='homework'&&x.homeworkId===e.homeworkId&&x.homeworkStartDate===startDate&&x.homeworkEndDate===endDate&&!x.completed){
+         const sameHomework=x.kind==='homework'&&x.homeworkId===e.homeworkId&&!x.completed;
+         const sameBlock=e.homeworkSeriesId
+           ? x.homeworkSeriesId===e.homeworkSeriesId&&x.homeworkStartDate===startDate&&x.homeworkEndDate===endDate
+           : ((x.homeworkStartDate===startDate&&x.homeworkEndDate===endDate)||x.id===e.id);
+         if(sameHomework&&sameBlock){
            const next=stripUndefined({...x,title:`✅ ${cleanHomeworkTitle(x.title)}`,completed:true,completedAt:now.toISOString()});
            const map=byDate.get(s.id)??{};
            map[eventFieldKey(x.id)]=next;
@@ -214,6 +219,17 @@ export default function App(){
          }
        });
      });
+     if(!count){
+       const clickedSnap=snaps.find(s=>s.id===clickedDate);
+       const clickedItem=clickedSnap?.exists()
+         ? Object.values((clickedSnap.data() as DayDoc).events??{}).find(x=>x.id===e.id&&x.kind==='homework'&&!x.completed)
+         : undefined;
+       if(clickedItem&&clickedSnap){
+         const next=stripUndefined({...clickedItem,title:`✅ ${cleanHomeworkTitle(clickedItem.title)}`,completed:true,completedAt:now.toISOString()});
+         byDate.set(clickedDate,{[eventFieldKey(clickedItem.id)]:next});
+         count=1;
+       }
+     }
      if(!count)throw new Error('완료할 숙제 데이터를 찾지 못했습니다.');
      const record:EventItem={
        id:uid(),title:`✅ 숙제 완료 · ${cleanHomeworkTitle(e.title)}`,
@@ -233,7 +249,7 @@ export default function App(){
      });
      await batch.commit();
      setModal(null);
-     flash('숙제를 완료했습니다.');
+     flash(count>1?`${count}일치 숙제를 함께 완료했습니다.`:'숙제를 완료했습니다.');
    }catch(err){
      console.error('completeHomework failed',err);
      alert(`숙제 완료 저장에 실패했습니다. 저장 중 오류가 발생해 아무 변경도 저장하지 않았습니다. ${err instanceof Error?err.message:'Firebase 저장 오류'}`);

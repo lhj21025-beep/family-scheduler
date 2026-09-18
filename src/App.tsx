@@ -142,7 +142,50 @@ export default function App(){
      alert(`숙제 완료 저장에 실패했습니다. 저장 중 오류가 발생해 아무 변경도 저장하지 않았습니다. ${err instanceof Error?err.message:'Firebase 저장 오류'}`);
    }
  }
- const undoHomework=async(e:EventItem)=>{if(!e.completed)return;const startDate=e.homeworkStartDate??e.start.slice(0,10);const endDate=e.homeworkEndDate??e.start.slice(0,10);const dates=dateRange(startDate,endDate);try{const snaps=await Promise.all(dates.map(d=>getDoc(doc(db,'scheduleDays',dayId(d)))));const batch=writeBatch(db);let count=0;const byDate=new Map<string,Record<string,any>>();snaps.forEach(s=>{if(!s.exists())return;const data=s.data() as DayDoc;Object.values(data.events??{}).forEach(x=>{if(x.kind==='homework'&&x.homeworkId===e.homeworkId&&x.homeworkStartDate===startDate&&x.homeworkEndDate===endDate&&x.completed){const next=stripUndefined({...x,title:`📝 ${x.title.replace(/^✅\s*/,'')}`,completed:false,completedAt:undefined});const map=byDate.get(s.id)??{};map[eventFieldKey(x.id)]=next;byDate.set(s.id,map);count++}else if(x.kind==='homework-complete'&&x.homeworkId===e.homeworkId&&x.homeworkStartDate===startDate&&x.homeworkEndDate===endDate){const map=byDate.get(s.id)??{};map[eventFieldKey(x.id)]=deleteField();byDate.set(s.id,map)}})});if(!count)throw new Error('완료된 숙제 데이터를 찾지 못했습니다.');byDate.forEach((map,date)=>batch.set(doc(db,'scheduleDays',dayId(date)),{events:map},{merge:true}));await batch.commit();setModal(null);flash('숙제 완료를 되돌렸습니다.')}catch(err){console.error('undoHomework failed',err);alert(`숙제 완료 되돌리기에 실패했습니다. ${err instanceof Error?err.message:'Firebase 저장 오류'}`)}}}
+ const undoHomework=async(e:EventItem)=>{
+   if(!e.completed)return;
+   const startDate=e.homeworkStartDate??e.start.slice(0,10);
+   const endDate=e.homeworkEndDate??e.start.slice(0,10);
+   const dates=dateRange(startDate,endDate);
+   try{
+     const snaps=await Promise.all(dates.map(d=>getDoc(doc(db,'scheduleDays',dayId(d)))));
+     const batch=writeBatch(db);
+     const byDate=new Map<string,Record<string,any>>();
+     let count=0;
+     snaps.forEach(snap=>{
+       if(!snap.exists())return;
+       const data=snap.data() as DayDoc;
+       Object.values(data.events??{}).forEach(item=>{
+         if(item.kind==='homework'&&item.homeworkId===e.homeworkId&&item.homeworkStartDate===startDate&&item.homeworkEndDate===endDate&&item.completed){
+           const next=stripUndefined({
+             ...item,
+             title:`📝 ${item.title.replace(/^✅\\s*/,'')}`,
+             completed:false,
+             completedAt:undefined
+           });
+           const map=byDate.get(snap.id)??{};
+           map[eventFieldKey(item.id)]=next;
+           byDate.set(snap.id,map);
+           count++;
+         }else if(item.kind==='homework-complete'&&item.homeworkId===e.homeworkId&&item.homeworkStartDate===startDate&&item.homeworkEndDate===endDate){
+           const map=byDate.get(snap.id)??{};
+           map[eventFieldKey(item.id)]=deleteField();
+           byDate.set(snap.id,map);
+         }
+       });
+     });
+     if(!count)throw new Error('되돌릴 완료 숙제를 찾지 못했습니다.');
+     byDate.forEach((map,date)=>{
+       batch.set(doc(db,'scheduleDays',dayId(date)),{events:map},{merge:true});
+     });
+     await batch.commit();
+     setModal(null);
+     flash('숙제 완료를 되돌렸습니다.');
+   }catch(err){
+     console.error('undoHomework failed',err);
+     alert(`숙제 완료 되돌리기에 실패했습니다. ${err instanceof Error?err.message:'Firebase 저장 오류'}`);
+   }
+ }
  const saveFamilyData=async(nextHomeworks:Homework[],nextNotices:Notice[])=>setDoc(doc(db,'familyData',FAMILY_ID),{homeworks:nextHomeworks,notices:nextNotices.slice(0,50),legacyMigrated:true},{merge:true})
  const addHomework=async()=>{const n=homeworkName.trim();if(!n)return;if(homeworks.some(h=>h.name===n))return alert('이미 등록된 숙제입니다.');try{const next=[...homeworks,{id:uid(),name:n,familyId:FAMILY_ID}];await saveFamilyData(next,notices);setHomeworks(next.sort((a,b)=>a.name.localeCompare(b.name,'ko')));setHomeworkName('')}catch(e){console.error(e)}}
  const updateHomework=async()=>{if(!editing)return;const n=homeworkName.trim();if(!n)return;const next=homeworks.map(h=>h.id===editing.id?{...editing,name:n,familyId:FAMILY_ID}:h);await saveFamilyData(next,notices);setHomeworks(next.sort((a,b)=>a.name.localeCompare(b.name,'ko')));setEditing(null);setHomeworkName('')}

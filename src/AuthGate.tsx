@@ -21,6 +21,8 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState('')
   const [signingIn, setSigningIn] = useState(false)
 
+  const selectAllText = (e: React.FocusEvent<HTMLInputElement>) => { const el=e.currentTarget; setTimeout(()=>el.select(),0) }
+
   useEffect(() => {
     return onAuthStateChanged(auth, currentUser => {
       setUser(currentUser)
@@ -81,7 +83,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
 
         <label style={styles.label}>
           비밀번호
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={styles.input} autoComplete="current-password" placeholder="비밀번호" />
+          <input type="password" value={password} onFocus={selectAllText} onClick={selectAllText} onChange={e => setPassword(e.target.value)} style={styles.input} autoComplete="current-password" placeholder="비밀번호" />
         </label>
 
         {error && <div style={styles.error}>{error}</div>}

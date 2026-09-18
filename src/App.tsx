@@ -144,40 +144,50 @@ export default function App(){
  }
  const undoHomework=async(e:EventItem)=>{
    if(!e.completed)return;
-   const startDate=e.homeworkStartDate??e.start.slice(0,10);
-   const endDate=e.homeworkEndDate??e.start.slice(0,10);
-   const dates=dateRange(startDate,endDate);
+   const clickedDate=e.start.slice(0,10);
+   const hasSeriesRange=!!(e.homeworkStartDate&&e.homeworkEndDate);
+   const startDate=e.homeworkStartDate??clickedDate;
+   const endDate=e.homeworkEndDate??clickedDate;
+   const dates=hasSeriesRange?dateRange(startDate,endDate):[clickedDate];
    try{
      const snaps=await Promise.all(dates.map(d=>getDoc(doc(db,'scheduleDays',dayId(d)))));
      const batch=writeBatch(db);
-     const byDate=new Map<string,Record<string,any>>();
      let count=0;
      snaps.forEach(snap=>{
        if(!snap.exists())return;
+       const ref=doc(db,'scheduleDays',dayId(snap.id));
        const data=snap.data() as DayDoc;
        Object.values(data.events??{}).forEach(item=>{
-         if(item.kind==='homework'&&item.homeworkId===e.homeworkId&&item.homeworkStartDate===startDate&&item.homeworkEndDate===endDate&&item.completed){
+         const sameCompletedHomework=
+           item.kind==='homework'&&
+           item.homeworkId===e.homeworkId&&
+           !!item.completed&&
+           (hasSeriesRange
+             ? item.homeworkStartDate===startDate&&item.homeworkEndDate===endDate
+             : item.id===e.id||((!item.homeworkStartDate&&!item.homeworkEndDate)&&item.start.slice(0,10)===clickedDate));
+         if(sameCompletedHomework){
            const next=stripUndefined({
              ...item,
              title:`📝 ${item.title.replace(/^✅\\s*/,'')}`,
              completed:false,
              completedAt:undefined
            });
-           const map=byDate.get(snap.id)??{};
-           map[eventFieldKey(item.id)]=next;
-           byDate.set(snap.id,map);
+           batch.update(ref,new FieldPath('events',eventFieldKey(item.id)),next);
            count++;
-         }else if(item.kind==='homework-complete'&&item.homeworkId===e.homeworkId&&item.homeworkStartDate===startDate&&item.homeworkEndDate===endDate){
-           const map=byDate.get(snap.id)??{};
-           map[eventFieldKey(item.id)]=deleteField();
-           byDate.set(snap.id,map);
+           return;
+         }
+         const sameCompletionRecord=
+           item.kind==='homework-complete'&&
+           item.homeworkId===e.homeworkId&&
+           (hasSeriesRange
+             ? item.homeworkStartDate===startDate&&item.homeworkEndDate===endDate
+             : item.start.slice(0,10)===clickedDate);
+         if(sameCompletionRecord){
+           batch.update(ref,new FieldPath('events',eventFieldKey(item.id)),deleteField());
          }
        });
      });
      if(!count)throw new Error('되돌릴 완료 숙제를 찾지 못했습니다.');
-     byDate.forEach((map,date)=>{
-       batch.set(doc(db,'scheduleDays',dayId(date)),{events:map},{merge:true});
-     });
      await batch.commit();
      setModal(null);
      flash('숙제 완료를 되돌렸습니다.');

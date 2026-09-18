@@ -21,7 +21,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState('')
   const [signingIn, setSigningIn] = useState(false)
 
-  const selectAllText = (e: React.FocusEvent<HTMLInputElement>) => { const el=e.currentTarget; setTimeout(()=>el.select(),0) }
+  const selectAllText = (e: React.SyntheticEvent<HTMLInputElement>) => { const el=e.currentTarget; setTimeout(()=>el.select(),0) }
 
   useEffect(() => {
     return onAuthStateChanged(auth, currentUser => {

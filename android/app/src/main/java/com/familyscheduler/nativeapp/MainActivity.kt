@@ -69,7 +69,7 @@ class MainActivity : AppCompatActivity() {
         }
         val password = EditText(this).apply {
             hint = "비밀번호"; setText("111111"); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            selectAllOnFocus = true; setPadding(dp(12))
+            setSelectAllOnFocus(true); setPadding(dp(12))
         }
         val login = MaterialButton(this).apply {
             text = "로그인"; setTextColor(Color.WHITE); setBackgroundColor(Color.rgb(37, 99, 235))
@@ -336,7 +336,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun edit(hint: String, value: String, keyboard: Boolean = true) = EditText(this).apply {
-        this.hint = hint; setText(value); selectAllOnFocus = true; setPadding(dp(12));
+        this.hint = hint; setText(value); setSelectAllOnFocus(true); setPadding(dp(12));
         if (!keyboard) { isFocusable = false; isClickable = true }
     }
     private fun label(text: String) = TextView(this).apply { this.text = text; typeface = Typeface.DEFAULT_BOLD; setTextColor(0xFF334155.toInt()); setPadding(0, dp(5), 0, dp(4)) }

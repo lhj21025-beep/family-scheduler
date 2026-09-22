@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">우리 가족 스케줄러</string>
+    <string name="widget_description">오늘의 가족 일정과 숙제를 보여줍니다.</string>
+</resources>

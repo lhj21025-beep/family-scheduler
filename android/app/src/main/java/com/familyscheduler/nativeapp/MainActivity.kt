@@ -130,7 +130,7 @@ class MainActivity : AppCompatActivity() {
         }
         memberBar.addView(memberRow); root.addView(memberBar)
         val search = EditText(this).apply {
-            hint="🔍  일정·장소·메모 검색";singleLine=true;textSize=14f;setPadding(dp(12),dp(2),dp(12),dp(2));background=rounded(Color.WHITE,7f,0xFFDADCE0.toInt())
+            hint="🔍  일정·장소·메모 검색";setSingleLine(true);textSize=14f;setPadding(dp(12),dp(2),dp(12),dp(2));background=rounded(Color.WHITE,7f,0xFFDADCE0.toInt())
             addTextChangedListener(object:android.text.TextWatcher{override fun beforeTextChanged(s:CharSequence?,st:Int,c:Int,a:Int){};override fun onTextChanged(s:CharSequence?,st:Int,b:Int,c:Int){searchQuery=s?.toString().orEmpty();renderMonth()};override fun afterTextChanged(s:android.text.Editable?) {}})
         }
         root.addView(search,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(40)).apply{setMargins(dp(12),0,dp(12),dp(5))})

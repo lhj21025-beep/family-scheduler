@@ -14,6 +14,7 @@ class FamilyRepository {
     private val db = FirebaseFirestore.getInstance()
     private var monthListener: ListenerRegistration? = null
     private var homeworkListener: ListenerRegistration? = null
+    private var noticeListener: ListenerRegistration? = null
 
     fun login(email: String, password: String, done: (Result<Unit>) -> Unit) {
         auth.signInWithEmailAndPassword(email, password)
@@ -50,6 +51,25 @@ class FamilyRepository {
                 val items = raw?.mapNotNull { value -> (value as? Map<*, *>)?.let { Homework.fromMap(it) } }.orEmpty()
                 update((items.ifEmpty { defaultHomeworks }).sortedBy { it.name })
             }
+    }
+
+    fun listenNotices(update: (List<FamilyNotice>) -> Unit) {
+        noticeListener?.remove()
+        noticeListener = db.collection("familyData").document("family-main")
+            .addSnapshotListener { snapshot, _ ->
+                val raw = snapshot?.get("notices") as? List<*>
+                val items = raw?.mapNotNull { value ->
+                    (value as? Map<*, *>)?.let { FamilyNotice.fromMap(it) }
+                }.orEmpty()
+                update(items.sortedByDescending { it.createdAt })
+            }
+    }
+
+    fun saveNotices(notices: List<FamilyNotice>, done: (Result<Unit>) -> Unit) {
+        db.collection("familyData").document("family-main")
+            .set(mapOf("notices" to notices.take(50).map(FamilyNotice::toMap)), SetOptions.merge())
+            .addOnSuccessListener { done(Result.success(Unit)) }
+            .addOnFailureListener { done(Result.failure(it)) }
     }
 
     fun saveEvent(event: FamilyEvent, done: (Result<Unit>) -> Unit) {
@@ -157,7 +177,7 @@ class FamilyRepository {
             .addOnFailureListener { done(emptyList()) }
     }
 
-    fun close() { monthListener?.remove(); homeworkListener?.remove() }
+    fun close() { monthListener?.remove(); homeworkListener?.remove(); noticeListener?.remove() }
 
     private fun parseEvents(snapshot: DocumentSnapshot): List<FamilyEvent> {
         val events = snapshot.get("events") as? Map<*, *> ?: return emptyList()

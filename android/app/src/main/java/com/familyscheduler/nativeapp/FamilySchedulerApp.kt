@@ -25,5 +25,7 @@ class FamilySchedulerApp : Application() {
         FirebaseFirestore.getInstance().firestoreSettings = FirebaseFirestoreSettings.Builder()
             .setPersistenceEnabled(true)
             .build()
+        AlarmScheduler.createChannel(this)
+        AlarmScheduler.restore(this)
     }
 }

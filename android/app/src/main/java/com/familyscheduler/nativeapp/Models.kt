@@ -23,6 +23,7 @@ data class FamilyEvent(
     val memo: String? = null,
     val repeat: String = "none",
     val repeatCount: Int = 1,
+    val alarmMinutes: List<Int> = emptyList(),
     val createdBy: String? = null,
     val familyId: String = "family-main",
 ) {
@@ -41,6 +42,7 @@ data class FamilyEvent(
         location?.takeIf { it.isNotBlank() }?.let { put("location", it) }
         memo?.takeIf { it.isNotBlank() }?.let { put("memo", it) }
         put("repeat", repeat); put("repeatCount", repeatCount)
+        if (alarmMinutes.isNotEmpty()) put("alarmMinutes", alarmMinutes)
         createdBy?.let { put("createdBy", it) }
         put("familyId", familyId)
     }
@@ -67,6 +69,7 @@ data class FamilyEvent(
                 memo = data["memo"] as? String,
                 repeat = data["repeat"] as? String ?: "none",
                 repeatCount = (data["repeatCount"] as? Number)?.toInt() ?: 1,
+                alarmMinutes = (data["alarmMinutes"] as? List<*>)?.mapNotNull { (it as? Number)?.toInt() } ?: emptyList(),
                 createdBy = data["createdBy"] as? String,
                 familyId = data["familyId"] as? String ?: "family-main",
             )
@@ -77,6 +80,35 @@ data class FamilyEvent(
 data class Homework(val id: String, val name: String) {
     companion object {
         fun fromMap(data: Map<*, *>) = Homework(data["id"] as? String ?: newId(), data["name"] as? String ?: "숙제")
+    }
+}
+
+data class FamilyNotice(
+    val id: String = newId(),
+    val title: String = "가족 메모",
+    val body: String = "",
+    val createdAt: String = nowIso(),
+    val createdBy: String? = null,
+    val familyId: String = "family-main",
+) {
+    fun toMap(): Map<String, Any> = buildMap {
+        put("id", id); put("title", title); put("body", body); put("createdAt", createdAt)
+        createdBy?.let { put("createdBy", it) }
+        put("familyId", familyId)
+    }
+
+    companion object {
+        fun fromMap(data: Map<*, *>): FamilyNotice? {
+            val id = data["id"] as? String ?: return null
+            return FamilyNotice(
+                id = id,
+                title = data["title"] as? String ?: "가족 메모",
+                body = data["body"] as? String ?: "",
+                createdAt = data["createdAt"] as? String ?: "",
+                createdBy = data["createdBy"] as? String,
+                familyId = data["familyId"] as? String ?: "family-main",
+            )
+        }
     }
 }
 

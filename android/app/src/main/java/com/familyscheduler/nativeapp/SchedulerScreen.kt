@@ -287,6 +287,7 @@ private fun SearchResultsScreen(
         }
     }
 }
+}
 
 @Composable private fun RowScope.Header(text: String, weight: Float) = Text(text, Modifier.weight(weight).padding(horizontal = 4.dp), color = MutedText, fontSize = 11.sp, fontWeight = FontWeight.Bold)
 @Composable private fun RowScope.Cell(text: String, weight: Float) = Text(text, Modifier.weight(weight).padding(horizontal = 4.dp), fontSize = 11.sp)

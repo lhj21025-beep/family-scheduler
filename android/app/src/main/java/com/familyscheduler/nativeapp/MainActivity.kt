@@ -18,7 +18,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.view.setPadding
 import androidx.core.app.ActivityCompat
 import com.google.android.material.button.MaterialButton
@@ -27,7 +31,7 @@ import java.time.LocalTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : ComponentActivity() {
     private val repo = FamilyRepository()
     private var month = YearMonth.now()
     private var selectedDate = LocalDate.now()
@@ -37,6 +41,8 @@ class MainActivity : AppCompatActivity() {
     private val visibleMembers = members.map { it.id }.toMutableSet()
     private var viewMode = "week"
     private var searchQuery = ""
+    private var composeEvents by mutableStateOf(emptyList<FamilyEvent>())
+    private var composeLoading by mutableStateOf(false)
 
     private lateinit var monthTitle: TextView
     private lateinit var calendar: GridLayout
@@ -101,6 +107,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showCalendar() {
+        setContent {
+            SchedulerScreen(
+                events = composeEvents,
+                loading = composeLoading,
+                startMonth = month,
+                onMonthChanged = { next -> month = next; listenMonth() },
+                onEventClick = { showEventDetails(it) },
+                onAddEvent = { date -> selectedDate = date; showEventEditor(null) },
+                onToday = { showTodaySummary() },
+                onNotice = { showNoticeInfo() },
+                onStats = { showStats() },
+                onHomework = { date -> selectedDate = date; showHomeworkDialog() },
+                onSettings = { showSettings() },
+                onSearch = { term, done -> repo.searchEvents(term, done) },
+            )
+        }
+        repo.listenHomeworks { runOnUiThread { homeworks = it } }
+        repo.listenNotices { runOnUiThread { notices = it } }
+        requestNotificationPermission()
+        listenMonth()
+    }
+
+    @Suppress("unused")
+    private fun showLegacyCalendar() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.WHITE)
         }
@@ -168,9 +198,11 @@ class MainActivity : AppCompatActivity() {
     private fun selectMonthStart() { selectedDate = if (month == YearMonth.now()) LocalDate.now() else month.atDay(1) }
 
     private fun listenMonth() {
-        loading.visibility = View.VISIBLE
-        repo.listenMonth(month, { runOnUiThread { allEvents = it; it.filter { e -> e.memberIds.contains(repo.signedMember()) }.forEach { e -> AlarmScheduler.scheduleEvent(this,e) }; loading.visibility = View.GONE; renderMonth() } },
-            { runOnUiThread { loading.visibility = View.GONE; toast("일정을 불러오지 못했습니다.") } })
+        composeLoading = true
+        repo.listenMonth(month, { rows -> runOnUiThread {
+            allEvents = rows; composeEvents = rows; composeLoading = false
+            rows.filter { event -> event.memberIds.contains(repo.signedMember()) }.forEach { event -> AlarmScheduler.scheduleEvent(this, event) }
+        } }, { runOnUiThread { composeLoading = false; toast("일정을 불러오지 못했습니다.") } })
     }
 
     private fun renderMonth() {

@@ -32,8 +32,8 @@ class FamilyRepository {
 
     fun listenMonth(month: YearMonth, update: (List<FamilyEvent>) -> Unit, error: (Exception) -> Unit) {
         monthListener?.remove()
-        val start = month.atDay(1).toString()
-        val end = month.plusMonths(1).atDay(1).toString()
+        val start = month.minusMonths(1).atDay(1).toString()
+        val end = month.plusMonths(2).atDay(1).toString()
         monthListener = db.collection("scheduleDays")
             .whereGreaterThanOrEqualTo("date", start).whereLessThan("date", end)
             .addSnapshotListener { snapshots, e ->
@@ -175,6 +175,20 @@ class FamilyRepository {
         db.collection("scheduleDays").document(today).get()
             .addOnSuccessListener { done(parseEvents(it).sortedBy(FamilyEvent::start)) }
             .addOnFailureListener { done(emptyList()) }
+    }
+
+    fun searchEvents(term: String, done: (Result<List<FamilyEvent>>) -> Unit) {
+        val needle = term.trim().lowercase()
+        if (needle.isBlank()) return done(Result.success(emptyList()))
+        db.collection("scheduleDays").get()
+            .addOnSuccessListener { snapshots ->
+                val rows = snapshots.documents.flatMap { parseEvents(it) }.filter { event ->
+                    val family = event.memberIds.mapNotNull { id -> members.firstOrNull { it.id == id }?.label }.joinToString(" ")
+                    "${event.date} ${event.title} ${event.location.orEmpty()} ${event.memo.orEmpty()} $family".lowercase().contains(needle)
+                }.sortedBy { it.start }
+                done(Result.success(rows))
+            }
+            .addOnFailureListener { done(Result.failure(it)) }
     }
 
     fun close() { monthListener?.remove(); homeworkListener?.remove(); noticeListener?.remove() }

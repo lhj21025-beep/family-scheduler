@@ -144,14 +144,8 @@ body {
   padding: 7px;
 }
 .fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number {
-  background: #1a73e8;
-  color: #fff;
-  border-radius: 50%;
-  width: 28px;
-  height: 28px;
-  text-align: center;
-  padding: 5px;
-  margin: 3px;
+  color: #1967d2;
+  font-weight: 700;
 }
 .fc .fc-event {
   border-radius: 5px;

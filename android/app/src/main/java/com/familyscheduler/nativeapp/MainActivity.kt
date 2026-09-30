@@ -390,7 +390,7 @@ class MainActivity : ComponentActivity() {
     private fun showHomeworkOptions(selected: List<Homework>) {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20)) }
         box.addView(TextView(this).apply { text = selected.joinToString(", ") { it.name }; setTextColor(0xFF475569.toInt()); setPadding(0, 0, 0, dp(12)) })
-        val schoolOtherSelected = selected.any { it.id == "school-other" }
+        val schoolOtherSelected = selected.any { it.id == "school-other" || it.name.replace(" ", "").contains("학교숙제(기타)") }
         val schoolOtherDetail = edit("어떤 학교숙제인가요? (예: 수학 익힘책 20쪽)", "")
         if (schoolOtherSelected) {
             box.addView(label("학교숙제 내용"))
@@ -410,7 +410,7 @@ class MainActivity : ComponentActivity() {
                 if (endDate.isBefore(startDate)) return@setOnClickListener toast("종료일은 시작일 이후여야 합니다.")
                 if (schoolOtherSelected && schoolOtherDetail.text.isBlank()) return@setOnClickListener toast("어떤 학교숙제인지 입력해 주세요.")
                 val resolvedSelected = selected.map { homework ->
-                    if (homework.id == "school-other") homework.copy(name = "학교숙제 · ${schoolOtherDetail.text.toString().trim()}") else homework
+                    if (homework.id == "school-other" || homework.name.replace(" ", "").contains("학교숙제(기타)")) homework.copy(name = "학교숙제 · ${schoolOtherDetail.text.toString().trim()}") else homework
                 }
                 val repeatCodes = listOf("none", "daily", "weekdays", "weekly", "monthly")
                 val repeatCode = repeatCodes[repeat.selectedItemPosition]

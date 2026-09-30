@@ -5,6 +5,7 @@ import timeGridPlugin from "@fullcalendar/timegrid";
 import interactionPlugin from "@fullcalendar/interaction";
 import koLocale from "@fullcalendar/core/locales/ko";
 import type { EventClickArg, DatesSetArg } from "@fullcalendar/core";
+import KoreanLunarCalendar from "korean-lunar-calendar";
 import {
   collection,
   deleteField,
@@ -22,7 +23,8 @@ import {
 import { auth, db } from "./firebase";
 
 type MemberId = "me" | "wife" | "son";
-type Repeat = "none" | "daily" | "weekdays" | "weekly" | "monthly";
+type Repeat = "none" | "daily" | "weekdays" | "weekly" | "monthly" | "lunarYearly";
+type RepeatEndMode = "count" | "date";
 type Alarm = 5 | 10 | 30 | 60;
 type EventItem = {
   id: string;
@@ -42,6 +44,12 @@ type EventItem = {
   memo?: string;
   repeat?: Repeat;
   repeatCount?: number;
+  repeatEndMode?: RepeatEndMode;
+  repeatUntil?: string;
+  calendarType?: "solar" | "lunar";
+  lunarMonth?: number;
+  lunarDay?: number;
+  lunarLeapMonth?: boolean;
   alarmMinutes?: Alarm[];
   familyId?: string;
   createdBy?: string;
@@ -69,6 +77,7 @@ const accountMemberByEmail: Record<string, MemberId> = {
   "son@family-scheduler.app": "son",
 };
 const homeworkDefaults: Homework[] = [
+  { id: "school-other", name: "학교숙제(기타)" },
   { id: "eli-english", name: "엘리하이(영어)" },
   { id: "eli-math", name: "엘리하이(수학)" },
   { id: "eli-science", name: "엘리하이(과학)" },
@@ -106,7 +115,7 @@ const cleanHomeworkTitle = (title: string) =>
     .replace(/^(?:(?:📝|✅|☑️|☑|✔️|✔)\s*)+/u, "")
     .replace(/^숙제 완료\s*·\s*/, "")
     .trim();
-const nextRepeatDate = (d: Date, repeat: Repeat) => {
+const nextRepeatDate = (d: Date, repeat: Repeat, anchorDay = d.getDate()) => {
   const next = new Date(d);
   if (repeat === "daily") next.setDate(next.getDate() + 1);
   else if (repeat === "weekdays") {
@@ -115,21 +124,22 @@ const nextRepeatDate = (d: Date, repeat: Repeat) => {
     } while (next.getDay() === 0 || next.getDay() === 6);
   } else if (repeat === "weekly") next.setDate(next.getDate() + 7);
   else if (repeat === "monthly") {
-    const day = next.getDate();
     next.setDate(1);
     next.setMonth(next.getMonth() + 1);
     const last = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
-    next.setDate(Math.min(day, last));
+    next.setDate(Math.min(anchorDay, last));
   }
   return next;
 };
-const repeatDates = (start: string, repeat: Repeat, count = 1) => {
+const repeatDates = (start: string, repeat: Repeat, count = 1, until?: string) => {
   if (repeat === "none") return [start];
   const total = clampRepeatCount(count);
   const out: string[] = [start];
   let d = new Date(start);
-  while (out.length < total) {
-    d = nextRepeatDate(d, repeat);
+  const anchorDay = d.getDate();
+  while (out.length < (until ? 365 : total)) {
+    d = nextRepeatDate(d, repeat, anchorDay);
+    if (until && dateKey(d) > until) break;
     out.push(dateTime(d));
   }
   return out;
@@ -139,9 +149,38 @@ const homeworkRepeatDates = (startDate: string, repeat: Repeat, count = 1) => {
   const total = clampRepeatCount(count);
   const out: string[] = [startDate];
   let d = new Date(`${startDate}T12:00:00`);
+  const anchorDay = d.getDate();
   while (out.length < total) {
-    d = nextRepeatDate(d, repeat);
+    d = nextRepeatDate(d, repeat, anchorDay);
     out.push(dateKey(d));
+  }
+  return out;
+};
+type LunarInfo = { year: number; month: number; day: number; intercalation: boolean };
+const solarToLunar = (solar: string): LunarInfo | null => {
+  const [year, month, day] = solar.slice(0, 10).split("-").map(Number);
+  const calendar = new KoreanLunarCalendar();
+  if (!calendar.setSolarDate(year, month, day)) return null;
+  const value = calendar.getLunarCalendar();
+  return { year: value.year, month: value.month, day: value.day, intercalation: !!value.intercalation };
+};
+const lunarToSolar = (year: number, month: number, day: number, leap: boolean) => {
+  const calendar = new KoreanLunarCalendar();
+  let accepted = calendar.setLunarDate(year, month, day, leap);
+  if (!accepted && leap) accepted = calendar.setLunarDate(year, month, day, false);
+  if (!accepted && day === 30) accepted = calendar.setLunarDate(year, month, 29, false);
+  if (!accepted) return null;
+  const value = calendar.getSolarCalendar();
+  return `${value.year}-${pad(value.month)}-${pad(value.day)}`;
+};
+const lunarRepeatDates = (start: string, count: number, until: string | undefined, lunar: LunarInfo) => {
+  const time = start.slice(11, 16) || "00:00";
+  const out: string[] = [];
+  for (let year = lunar.year; year <= 2050 && out.length < (until ? 365 : count); year++) {
+    const solar = lunarToSolar(year, lunar.month, lunar.day, lunar.intercalation);
+    if (!solar || solar < start.slice(0, 10)) continue;
+    if (until && solar > until) break;
+    out.push(`${solar}T${time}`);
   }
   return out;
 };
@@ -191,6 +230,7 @@ export default function App() {
     [modal, setModal] = useState<EventItem | null>(null);
   const [homeworkRepeat, setHomeworkRepeat] = useState<Repeat>("daily");
   const [homeworkRepeatCount, setHomeworkRepeatCount] = useState(2);
+  const [schoolHomeworkDetail, setSchoolHomeworkDetail] = useState("");
   const [todayOpen, setTodayOpen] = useState(false),
     [noticeOpen, setNoticeOpen] = useState(false),
     [statsOpen, setStatsOpen] = useState(false),
@@ -453,9 +493,15 @@ export default function App() {
     if (!e.memberIds.length) return alert("최소 한 명을 선택해주세요.");
     try {
       const repeat = e.repeat ?? "none";
+      const until = e.repeatEndMode === "date" ? e.repeatUntil : undefined;
+      if (repeat !== "none" && e.repeatEndMode === "date" && (!until || until < e.start.slice(0, 10)))
+        return alert("반복 종료일은 시작일과 같거나 이후로 선택해주세요.");
       const count =
         repeat === "none" ? 1 : clampRepeatCount(e.repeatCount ?? 1);
-      const dates = repeatDates(e.start, repeat, count);
+      const lunar = solarToLunar(e.start);
+      const dates = repeat === "lunarYearly" && lunar
+        ? lunarRepeatDates(e.start, count, until, lunar)
+        : repeatDates(e.start, repeat, count, until);
       const duration = e.end
         ? new Date(e.end).getTime() - new Date(e.start).getTime()
         : 3600000;
@@ -470,6 +516,12 @@ export default function App() {
               : undefined,
             repeat: i === 0 ? repeat : "none",
             repeatCount: i === 0 ? count : 1,
+            repeatEndMode: i === 0 ? (e.repeatEndMode ?? "count") : "count",
+            repeatUntil: i === 0 ? until : undefined,
+            calendarType: repeat === "lunarYearly" ? "lunar" : "solar",
+            lunarMonth: repeat === "lunarYearly" ? lunar?.month : undefined,
+            lunarDay: repeat === "lunarYearly" ? lunar?.day : undefined,
+            lunarLeapMonth: repeat === "lunarYearly" ? lunar?.intercalation : false,
           }),
         ),
       );
@@ -512,9 +564,20 @@ export default function App() {
   };
   const registerHomework = async () => {
     if (!homeworkIds.length) return;
+    if (
+      homeworkIds.includes("school-other") &&
+      !schoolHomeworkDetail.trim()
+    )
+      return alert("어떤 학교숙제인지 입력해주세요.");
     if (homeworkEndDate < homeworkStartDate)
       return alert("종료일은 시작일과 같거나 이후로 선택해주세요.");
-    const chosen = homeworks.filter((h) => homeworkIds.includes(h.id));
+    const chosen = homeworks
+      .filter((h) => homeworkIds.includes(h.id))
+      .map((h) =>
+        h.id === "school-other"
+          ? { ...h, name: `학교숙제 · ${schoolHomeworkDetail.trim()}` }
+          : h,
+      );
     const count =
       homeworkRepeat === "none" ? 1 : clampRepeatCount(homeworkRepeatCount);
     const occurrenceStarts = homeworkRepeatDates(
@@ -561,6 +624,7 @@ export default function App() {
       await Promise.all(created.map(writeDayEvent));
       setHomeworkOpen(false);
       setHomeworkIds([]);
+      setSchoolHomeworkDetail("");
       setHomeworkStartDate(today);
       setHomeworkEndDate(today);
       setHomeworkRepeat("none");
@@ -1095,6 +1159,10 @@ export default function App() {
           selectable
           dateClick={addSchedule}
           eventClick={clickEvent}
+          dayCellContent={(arg) => {
+            const lunar = solarToLunar(dateKey(arg.date));
+            return <><span>{arg.dayNumberText}</span>{lunar && <small className="lunar-day">음 {lunar.month}/{lunar.day}{lunar.intercalation ? " 윤" : ""}</small>}</>;
+          }}
           datesSet={datesSet}
           eventDrop={(a) =>
             a.event.start &&
@@ -1443,6 +1511,17 @@ export default function App() {
                 </button>
               ))}
             </div>
+            {homeworkIds.includes("school-other") && (
+              <label className="school-homework-detail">
+                어떤 학교숙제인가요?
+                <input
+                  autoFocus
+                  value={schoolHomeworkDetail}
+                  onChange={(e) => setSchoolHomeworkDetail(e.target.value)}
+                  placeholder="예: 과학 준비물 조사, 수학 익힘책 20쪽"
+                />
+              </label>
+            )}
             <div className="homework-modal-actions">
               <button className="save-btn" onClick={registerHomework}>
                 선택한 숙제 등록
@@ -1805,13 +1884,39 @@ export default function App() {
                         <option value="weekdays">평일</option>
                         <option value="weekly">매주</option>
                         <option value="monthly">매월</option>
+                        <option value="lunarYearly">음력 매년</option>
                       </select>
                     </label>
+                    {(modal.repeat ?? "none") !== "none" && (
+                      <div className="form-grid">
+                        <label>
+                          반복 종료 방식
+                          <select
+                            value={modal.repeatEndMode ?? "count"}
+                            onChange={(e) => setModal({ ...modal, repeatEndMode: e.target.value as RepeatEndMode })}
+                          >
+                            <option value="count">횟수</option>
+                            <option value="date">날짜까지</option>
+                          </select>
+                        </label>
+                        {(modal.repeat ?? "none") === "lunarYearly" && (() => {
+                          const lunar = solarToLunar(modal.start);
+                          return <div className="field-hint lunar-summary">음력 {lunar?.month}월 {lunar?.day}일 · {lunar?.intercalation ? "윤달" : "평달"} (자동 판별)</div>;
+                        })()}
+                        {(modal.repeatEndMode ?? "count") === "date" && (
+                          <label>
+                            반복 종료일 📅
+                            <input type="date" min={modal.start.slice(0, 10)} value={modal.repeatUntil ?? modal.start.slice(0, 10)} onChange={(e) => setModal({ ...modal, repeatUntil: e.target.value })} />
+                            <span className="field-hint">매주는 같은 요일, 평일은 월~금만 등록됩니다.</span>
+                          </label>
+                        )}
+                      </div>
+                    )}
                     <div className="form-grid">
                       <label>
                         반복 횟수
                         <select
-                          disabled={(modal.repeat ?? "none") === "none"}
+                          disabled={(modal.repeat ?? "none") === "none" || (modal.repeatEndMode ?? "count") === "date"}
                           value={
                             [2, 3, 5, 10, 20, 30, 60].includes(
                               modal.repeatCount ?? 1,
@@ -1843,7 +1948,7 @@ export default function App() {
                           type="number"
                           min="1"
                           max="365"
-                          disabled={(modal.repeat ?? "none") === "none"}
+                          disabled={(modal.repeat ?? "none") === "none" || (modal.repeatEndMode ?? "count") === "date"}
                           value={
                             (modal.repeat ?? "none") === "none"
                               ? 1

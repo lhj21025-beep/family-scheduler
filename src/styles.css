@@ -849,3 +849,7 @@ body {
 .homework-delete-backdrop {
   z-index: 1100;
 }
+.school-homework-detail { display: grid; gap: 7px; margin: 14px 0; font-weight: 700; }
+.school-homework-detail input { padding: 11px 12px; border: 1px solid #cbd5e1; border-radius: 9px; font: inherit; }
+.lunar-day { display: block; color: #64748b; font-size: 9px; line-height: 1.1; font-weight: 400; }
+.lunar-summary { align-self: end; padding: 10px; border-radius: 8px; background: #f8fafc; }

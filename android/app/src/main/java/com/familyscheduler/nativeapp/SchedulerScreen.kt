@@ -204,6 +204,7 @@ private fun MonthCalendar(month: YearMonth, selected: LocalDate, events: List<Fa
                     ) {
                         if (date != null) {
                             Text(date.dayOfMonth.toString(), Modifier.size(25.dp).background(if (date == selected) GoogleBlue else Color.Transparent, CircleShape).padding(top = 3.dp), textAlign = TextAlign.Center, color = if (date == selected) Color.White else GoogleText, fontSize = 12.sp)
+                            solarToLunar(date)?.let { lunar -> Text("음 ${lunar.month}/${lunar.day}${if (lunar.leap) " 윤" else ""}", fontSize = 7.sp, color = MutedText, maxLines = 1) }
                             events.filter { it.date == date.toString() }.take(3).forEach { event -> EventPill(event, onEvent, 9) }
                         }
                     }
@@ -223,6 +224,7 @@ private fun TimeCalendar(days: List<LocalDate>, events: List<FamilyEvent>, onEve
                 Column(Modifier.weight(1f).padding(vertical = 5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(listOf("월", "화", "수", "목", "금", "토", "일")[day.dayOfWeek.value - 1], fontSize = 11.sp, color = MutedText)
                     Text(day.dayOfMonth.toString(), Modifier.size(28.dp).background(if (day == LocalDate.now()) GoogleBlue else Color.Transparent, CircleShape).padding(top = 4.dp), textAlign = TextAlign.Center, color = if (day == LocalDate.now()) Color.White else GoogleText)
+                    solarToLunar(day)?.let { lunar -> Text("음 ${lunar.month}/${lunar.day}", fontSize = 8.sp, color = MutedText) }
                 }
             }
         }

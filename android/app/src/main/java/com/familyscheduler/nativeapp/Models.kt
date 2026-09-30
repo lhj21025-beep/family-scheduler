@@ -23,6 +23,12 @@ data class FamilyEvent(
     val memo: String? = null,
     val repeat: String = "none",
     val repeatCount: Int = 1,
+    val repeatEndMode: String = "count",
+    val repeatUntil: String? = null,
+    val calendarType: String = "solar",
+    val lunarMonth: Int? = null,
+    val lunarDay: Int? = null,
+    val lunarLeapMonth: Boolean = false,
     val alarmMinutes: List<Int> = emptyList(),
     val createdBy: String? = null,
     val familyId: String = "family-main",
@@ -42,6 +48,11 @@ data class FamilyEvent(
         location?.takeIf { it.isNotBlank() }?.let { put("location", it) }
         memo?.takeIf { it.isNotBlank() }?.let { put("memo", it) }
         put("repeat", repeat); put("repeatCount", repeatCount)
+        put("repeatEndMode", repeatEndMode)
+        repeatUntil?.let { put("repeatUntil", it) }
+        put("calendarType", calendarType)
+        lunarMonth?.let { put("lunarMonth", it) }; lunarDay?.let { put("lunarDay", it) }
+        put("lunarLeapMonth", lunarLeapMonth)
         if (alarmMinutes.isNotEmpty()) put("alarmMinutes", alarmMinutes)
         createdBy?.let { put("createdBy", it) }
         put("familyId", familyId)
@@ -69,6 +80,12 @@ data class FamilyEvent(
                 memo = data["memo"] as? String,
                 repeat = data["repeat"] as? String ?: "none",
                 repeatCount = (data["repeatCount"] as? Number)?.toInt() ?: 1,
+                repeatEndMode = data["repeatEndMode"] as? String ?: "count",
+                repeatUntil = data["repeatUntil"] as? String,
+                calendarType = data["calendarType"] as? String ?: "solar",
+                lunarMonth = (data["lunarMonth"] as? Number)?.toInt(),
+                lunarDay = (data["lunarDay"] as? Number)?.toInt(),
+                lunarLeapMonth = data["lunarLeapMonth"] as? Boolean ?: false,
                 alarmMinutes = (data["alarmMinutes"] as? List<*>)?.mapNotNull { (it as? Number)?.toInt() } ?: emptyList(),
                 createdBy = data["createdBy"] as? String,
                 familyId = data["familyId"] as? String ?: "family-main",
@@ -121,6 +138,7 @@ val members = listOf(
 )
 
 val defaultHomeworks = listOf(
+    Homework("school-other", "학교숙제(기타)"),
     Homework("eli-english", "엘리하이(영어)"), Homework("eli-math", "엘리하이(수학)"),
     Homework("eli-science", "엘리하이(과학)"), Homework("eli-social", "엘리하이(사회)"),
     Homework("eli-korean", "엘리하이(국어)"), Homework("hanja", "한자"),
@@ -138,19 +156,20 @@ fun cleanHomeworkTitle(title: String): String = title
 fun datesBetween(start: LocalDate, end: LocalDate): List<LocalDate> =
     generateSequence(start) { it.plusDays(1) }.takeWhile { !it.isAfter(end) }.take(366).toList()
 
-fun repeatStarts(start: LocalDate, repeat: String, count: Int): List<LocalDate> {
+fun repeatStarts(start: LocalDate, repeat: String, count: Int, until: LocalDate? = null): List<LocalDate> {
     if (repeat == "none") return listOf(start)
     val result = mutableListOf(start)
     var date = start
-    while (result.size < count.coerceIn(1, 365)) {
+    while (result.size < if (until == null) count.coerceIn(1, 365) else 365) {
         date = when (repeat) {
             "daily" -> date.plusDays(1)
             "weekdays" -> generateSequence(date.plusDays(1)) { it.plusDays(1) }
                 .first { it.dayOfWeek.value in 1..5 }
             "weekly" -> date.plusWeeks(1)
-            "monthly" -> date.plusMonths(1)
+            "monthly" -> date.plusMonths(1).withDayOfMonth(start.dayOfMonth.coerceAtMost(date.plusMonths(1).lengthOfMonth()))
             else -> date
         }
+        if (until != null && date.isAfter(until)) break
         result += date
     }
     return result

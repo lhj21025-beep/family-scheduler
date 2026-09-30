@@ -320,9 +320,26 @@ class MainActivity : ComponentActivity() {
         val location = edit("장소", existing?.location.orEmpty()); box.addView(location)
         val memo = edit("메모", existing?.memo.orEmpty()); box.addView(memo)
         val selectedAlarms=(existing?.alarmMinutes?.toMutableSet()?: mutableSetOf(10));box.addView(label("알림"));val alarmRow=LinearLayout(this);listOf(5,10,30,60).forEach{min->alarmRow.addView(CheckBox(this).apply{text="${min}분 전";isChecked=selectedAlarms.contains(min);setOnCheckedChangeListener{_,yes->if(yes)selectedAlarms+=min else selectedAlarms-=min}})};box.addView(HorizontalScrollView(this).apply{addView(alarmRow)})
-        val repeatSpinner = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("반복 안 함", "매일", "평일", "매주", "매월")) }
+        val repeatSpinner = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("반복 안 함", "매일", "평일", "매주", "매월", "음력 매년")) }
+        val repeatEndMode = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("횟수", "날짜까지")) }
         val repeatCount = edit("반복 횟수", (existing?.repeatCount ?: 2).toString()).apply { inputType = InputType.TYPE_CLASS_NUMBER }
-        if (existing == null) { box.addView(label("반복")); box.addView(repeatSpinner); box.addView(repeatCount) }
+        val repeatUntil = edit("반복 종료일 📅", date.plusMonths(1).toString(), false).apply { setOnClickListener { pickDate(this) }; visibility = View.GONE }
+        val lunarSummary = TextView(this).apply { setTextColor(0xFF64748B.toInt()); setPadding(0, dp(6), 0, dp(6)); visibility = View.GONE }
+        if (existing == null) {
+            box.addView(label("반복")); box.addView(repeatSpinner); box.addView(label("반복 종료 방식")); box.addView(repeatEndMode); box.addView(repeatCount); box.addView(repeatUntil); box.addView(lunarSummary)
+            repeatEndMode.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { repeatCount.visibility = if (position == 0) View.VISIBLE else View.GONE; repeatUntil.visibility = if (position == 1) View.VISIBLE else View.GONE }
+            }
+            repeatSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    val lunar = runCatching { LocalDate.parse(dateInput.text.toString()) }.getOrNull()?.let(::solarToLunar)
+                    lunarSummary.visibility = if (position == 5) View.VISIBLE else View.GONE
+                    lunarSummary.text = lunar?.let { "음력 ${it.month}월 ${it.day}일 · ${if (it.leap) "윤달" else "평달"} (자동 판별)" }.orEmpty()
+                }
+            }
+        }
         val scroller = ScrollView(this).apply { addView(box) }
         val alert = AlertDialog.Builder(this).setTitle(if (existing == null) "새 일정" else "일정 수정").setView(scroller)
             .setPositiveButton("저장", null).setNegativeButton("취소", null).create()
@@ -332,10 +349,13 @@ class MainActivity : ComponentActivity() {
                 val chosenDate = runCatching { LocalDate.parse(dateInput.text) }.getOrNull() ?: return@setOnClickListener toast("날짜를 확인해 주세요.")
                 val start = runCatching { LocalTime.parse(startInput.text) }.getOrNull() ?: LocalTime.of(0, 0)
                 val end = runCatching { LocalTime.parse(endInput.text) }.getOrNull() ?: start.plusHours(1)
-                val repeatCodes = listOf("none", "daily", "weekdays", "weekly", "monthly")
+                val repeatCodes = listOf("none", "daily", "weekdays", "weekly", "monthly", "lunarYearly")
                 val repeat = if (existing == null) repeatCodes[repeatSpinner.selectedItemPosition] else "none"
                 val count = repeatCount.text.toString().toIntOrNull()?.coerceIn(1, 365) ?: 1
-                val occurrenceDates = repeatStarts(chosenDate, repeat, count)
+                val until = if (existing == null && repeatEndMode.selectedItemPosition == 1) runCatching { LocalDate.parse(repeatUntil.text.toString()) }.getOrNull() else null
+                if (repeat != "none" && repeatEndMode.selectedItemPosition == 1 && (until == null || until.isBefore(chosenDate))) return@setOnClickListener toast("반복 종료일은 시작일과 같거나 이후여야 합니다.")
+                val lunar = solarToLunar(chosenDate)
+                val occurrenceDates = if (repeat == "lunarYearly" && lunar != null) lunarRepeatStarts(chosenDate, lunar, count, until) else repeatStarts(chosenDate, repeat, count, until)
                 val baseId = existing?.id ?: newId()
                 val events = occurrenceDates.mapIndexed { index, day ->
                     FamilyEvent(
@@ -343,7 +363,10 @@ class MainActivity : ComponentActivity() {
                         start = dateTime(day, start.hour, start.minute), end = dateTime(day, end.hour, end.minute),
                         allDay = allDay.isChecked, memberIds = selectedMembers.toList(), alarmMinutes=selectedAlarms.sorted(),
                         location = location.text.toString(), memo = memo.text.toString(),
-                        repeat = if (index == 0) repeat else "none", repeatCount = if (index == 0) count else 1
+                        repeat = if (index == 0) repeat else "none", repeatCount = if (index == 0) count else 1,
+                        repeatEndMode = if (index == 0 && until != null) "date" else "count", repeatUntil = if (index == 0) until?.toString() else null,
+                        calendarType = if (repeat == "lunarYearly") "lunar" else "solar", lunarMonth = if (repeat == "lunarYearly") lunar?.month else null,
+                        lunarDay = if (repeat == "lunarYearly") lunar?.day else null, lunarLeapMonth = repeat == "lunarYearly" && lunar?.leap == true
                     )
                 }
                 alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
@@ -367,6 +390,12 @@ class MainActivity : ComponentActivity() {
     private fun showHomeworkOptions(selected: List<Homework>) {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20)) }
         box.addView(TextView(this).apply { text = selected.joinToString(", ") { it.name }; setTextColor(0xFF475569.toInt()); setPadding(0, 0, 0, dp(12)) })
+        val schoolOtherSelected = selected.any { it.id == "school-other" }
+        val schoolOtherDetail = edit("어떤 학교숙제인가요? (예: 수학 익힘책 20쪽)", "")
+        if (schoolOtherSelected) {
+            box.addView(label("학교숙제 내용"))
+            box.addView(schoolOtherDetail)
+        }
         val start = edit("시작일", selectedDate.toString(), false).apply { setOnClickListener { pickDate(this) } }
         val end = edit("종료일", selectedDate.toString(), false).apply { setOnClickListener { pickDate(this) } }
         box.addView(start); box.addView(end)
@@ -379,11 +408,15 @@ class MainActivity : ComponentActivity() {
                 val startDate = runCatching { LocalDate.parse(start.text) }.getOrNull() ?: return@setOnClickListener toast("시작일을 확인해 주세요.")
                 val endDate = runCatching { LocalDate.parse(end.text) }.getOrNull() ?: return@setOnClickListener toast("종료일을 확인해 주세요.")
                 if (endDate.isBefore(startDate)) return@setOnClickListener toast("종료일은 시작일 이후여야 합니다.")
+                if (schoolOtherSelected && schoolOtherDetail.text.isBlank()) return@setOnClickListener toast("어떤 학교숙제인지 입력해 주세요.")
+                val resolvedSelected = selected.map { homework ->
+                    if (homework.id == "school-other") homework.copy(name = "학교숙제 · ${schoolOtherDetail.text.toString().trim()}") else homework
+                }
                 val repeatCodes = listOf("none", "daily", "weekdays", "weekly", "monthly")
                 val repeatCode = repeatCodes[repeat.selectedItemPosition]
                 val total = count.text.toString().toIntOrNull()?.coerceIn(1, 365) ?: 1
                 alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                repo.registerHomework(selected, startDate, endDate, repeatCode, total) { result -> runOnUiThread { alert.dismiss(); toast(if (result.isSuccess) "${result.getOrDefault(0)}개 숙제를 등록했습니다." else "숙제 등록에 실패했습니다.") } }
+                repo.registerHomework(resolvedSelected, startDate, endDate, repeatCode, total) { result -> runOnUiThread { alert.dismiss(); toast(if (result.isSuccess) "${result.getOrDefault(0)}개 숙제를 등록했습니다." else "숙제 등록에 실패했습니다.") } }
             }
         }
         alert.show()

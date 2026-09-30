@@ -231,6 +231,11 @@ export default function App() {
   const [homeworkRepeat, setHomeworkRepeat] = useState<Repeat>("daily");
   const [homeworkRepeatCount, setHomeworkRepeatCount] = useState(2);
   const [schoolHomeworkDetail, setSchoolHomeworkDetail] = useState("");
+  const schoolOtherSelected = homeworks.some(
+    (h) =>
+      homeworkIds.includes(h.id) &&
+      (h.id === "school-other" || h.name.replaceAll(" ", "").includes("학교숙제(기타)")),
+  );
   const [todayOpen, setTodayOpen] = useState(false),
     [noticeOpen, setNoticeOpen] = useState(false),
     [statsOpen, setStatsOpen] = useState(false),
@@ -565,7 +570,7 @@ export default function App() {
   const registerHomework = async () => {
     if (!homeworkIds.length) return;
     if (
-      homeworkIds.includes("school-other") &&
+      schoolOtherSelected &&
       !schoolHomeworkDetail.trim()
     )
       return alert("어떤 학교숙제인지 입력해주세요.");
@@ -574,7 +579,7 @@ export default function App() {
     const chosen = homeworks
       .filter((h) => homeworkIds.includes(h.id))
       .map((h) =>
-        h.id === "school-other"
+        h.id === "school-other" || h.name.replaceAll(" ", "").includes("학교숙제(기타)")
           ? { ...h, name: `학교숙제 · ${schoolHomeworkDetail.trim()}` }
           : h,
       );
@@ -1511,7 +1516,7 @@ export default function App() {
                 </button>
               ))}
             </div>
-            {homeworkIds.includes("school-other") && (
+            {schoolOtherSelected && (
               <label className="school-homework-detail">
                 어떤 학교숙제인가요?
                 <input

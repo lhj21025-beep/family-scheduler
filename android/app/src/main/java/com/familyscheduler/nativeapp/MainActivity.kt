@@ -593,7 +593,16 @@ class MainActivity : ComponentActivity() {
         }}
         alert.show()
     }
-    private fun showSettings(){val items=arrayOf("🔔 알림 권한 및 정확한 알람 설정","🚪 로그아웃");AlertDialog.Builder(this).setTitle("⚙️ 알림 / 앱 설정").setItems(items){_,which->if(which==0){requestNotificationPermission();if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.S)runCatching{startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,Uri.parse("package:$packageName")))}}else{repo.logout();showLogin()}}.setNegativeButton("닫기",null).show()}
+    private fun showSettings(){
+        val items=arrayOf("🔔 알림 권한 및 정확한 알람 설정","테스트 알림","🚪 로그아웃")
+        AlertDialog.Builder(this).setTitle("⚙️ 알림 / 앱 설정").setItems(items){_,which->
+            when(which){
+                0->{requestNotificationPermission();if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.S)runCatching{startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,Uri.parse("package:$packageName")))}}
+                1->{requestNotificationPermission();AlarmScheduler.showTestNotification(this)}
+                else->{repo.logout();showLogin()}
+            }
+        }.setNegativeButton("닫기",null).show()
+    }
     private fun requestNotificationPermission(){if(Build.VERSION.SDK_INT>=33&&ActivityCompat.checkSelfPermission(this,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)ActivityCompat.requestPermissions(this,arrayOf(Manifest.permission.POST_NOTIFICATIONS),1001)}
 
     private fun edit(hint: String, value: String, keyboard: Boolean = true) = EditText(this).apply {

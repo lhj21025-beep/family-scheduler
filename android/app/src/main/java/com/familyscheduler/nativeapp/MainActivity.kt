@@ -289,11 +289,31 @@ class MainActivity : ComponentActivity() {
             "homework" -> {
                 dialog.setPositiveButton(if (event.completed) "완료 되돌리기" else "숙제 완료") { _, _ ->
                     repo.setHomeworkCompleted(event, !event.completed) { result -> runOnUiThread { toast(if (result.isSuccess) "숙제 상태를 변경했습니다." else "변경에 실패했습니다: ${result.exceptionOrNull()?.message}") } }
-                }.setNeutralButton("삭제") { _, _ -> confirmDelete(event) }
+                }.setNeutralButton("삭제") { _, _ -> showHomeworkDeleteOptions(event) }
             }
             "event" -> dialog.setPositiveButton("수정") { _, _ -> showEventEditor(event) }.setNeutralButton("삭제") { _, _ -> confirmDelete(event) }
         }
         dialog.setNegativeButton("닫기", null).show()
+    }
+
+    private fun showHomeworkDeleteOptions(event: FamilyEvent) {
+        val choices = arrayOf(
+            "이 숙제만\n현재 날짜의 숙제만 삭제",
+            "이 일정 및 이후 일정\n현재 날짜부터 반복 숙제 삭제",
+            "전체 반복 일정\n이미 지난 일정까지 모두 삭제"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("🗑 숙제 삭제")
+            .setItems(choices) { _, which ->
+                val mode = listOf("one", "future", "all")[which]
+                repo.deleteHomeworkEvents(event, mode) { result ->
+                    runOnUiThread {
+                        toast(if (result.isSuccess) "${result.getOrDefault(0)}개의 숙제를 삭제했습니다." else "숙제 삭제에 실패했습니다: ${result.exceptionOrNull()?.message.orEmpty()}")
+                    }
+                }
+            }
+            .setNegativeButton("취소", null)
+            .show()
     }
 
     private fun confirmDelete(event: FamilyEvent) {
@@ -322,14 +342,24 @@ class MainActivity : ComponentActivity() {
         val selectedAlarms=(existing?.alarmMinutes?.toMutableSet()?: mutableSetOf(10));box.addView(label("알림"));val alarmRow=LinearLayout(this);listOf(5,10,30,60).forEach{min->alarmRow.addView(CheckBox(this).apply{text="${min}분 전";isChecked=selectedAlarms.contains(min);setOnCheckedChangeListener{_,yes->if(yes)selectedAlarms+=min else selectedAlarms-=min}})};box.addView(HorizontalScrollView(this).apply{addView(alarmRow)})
         val repeatSpinner = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("반복 안 함", "매일", "평일", "매주", "매월", "음력 매년")) }
         val repeatEndMode = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("횟수", "날짜까지")) }
-        val repeatCount = edit("반복 횟수", (existing?.repeatCount ?: 2).toString()).apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        val repeatCountValues = listOf(2, 3, 5, 10, 20, 30, 60)
+        val repeatCountPreset = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, repeatCountValues.map { "${it}회" } + "직접 입력")
+        }
+        val repeatCount = edit("횟수 직접 입력", (existing?.repeatCount ?: 2).toString()).apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        repeatCountPreset.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (position < repeatCountValues.size) repeatCount.setText(repeatCountValues[position].toString())
+            }
+        }
         val repeatUntil = edit("반복 종료일 📅", date.plusMonths(1).toString(), false).apply { setOnClickListener { pickDate(this) }; visibility = View.GONE }
         val lunarSummary = TextView(this).apply { setTextColor(0xFF64748B.toInt()); setPadding(0, dp(6), 0, dp(6)); visibility = View.GONE }
         if (existing == null) {
-            box.addView(label("반복")); box.addView(repeatSpinner); box.addView(label("반복 종료 방식")); box.addView(repeatEndMode); box.addView(repeatCount); box.addView(repeatUntil); box.addView(lunarSummary)
+            box.addView(label("반복")); box.addView(repeatSpinner); box.addView(label("반복 종료 방식")); box.addView(repeatEndMode); box.addView(label("반복 횟수")); box.addView(repeatCountPreset); box.addView(repeatCount); box.addView(repeatUntil); box.addView(lunarSummary)
             repeatEndMode.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { repeatCount.visibility = if (position == 0) View.VISIBLE else View.GONE; repeatUntil.visibility = if (position == 1) View.VISIBLE else View.GONE }
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { repeatCountPreset.visibility = if (position == 0) View.VISIBLE else View.GONE; repeatCount.visibility = if (position == 0) View.VISIBLE else View.GONE; repeatUntil.visibility = if (position == 1) View.VISIBLE else View.GONE }
             }
             repeatSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
@@ -337,6 +367,9 @@ class MainActivity : ComponentActivity() {
                     val lunar = runCatching { LocalDate.parse(dateInput.text.toString()) }.getOrNull()?.let(::solarToLunar)
                     lunarSummary.visibility = if (position == 5) View.VISIBLE else View.GONE
                     lunarSummary.text = lunar?.let { "음력 ${it.month}월 ${it.day}일 · ${if (it.leap) "윤달" else "평달"} (자동 판별)" }.orEmpty()
+                    val enabled = position != 0
+                    repeatCountPreset.isEnabled = enabled; repeatCount.isEnabled = enabled; repeatEndMode.isEnabled = enabled
+                    if (!enabled) repeatCount.setText("1") else if ((repeatCount.text.toString().toIntOrNull() ?: 1) < 2) repeatCount.setText("2")
                 }
             }
         }
@@ -384,7 +417,69 @@ class MainActivity : ComponentActivity() {
         val chosen = mutableSetOf<Int>()
         AlertDialog.Builder(this).setTitle("등록할 숙제 선택").setMultiChoiceItems(names, checked) { _, which, isChecked -> if (isChecked) chosen += which else chosen -= which }
             .setPositiveButton("다음") { _, _ -> if (chosen.isNotEmpty()) showHomeworkOptions(chosen.map { homeworks[it] }) else toast("숙제를 선택해 주세요.") }
+            .setNeutralButton("숙제 항목 관리") { _, _ -> showHomeworkManageDialog() }
             .setNegativeButton("취소", null).show()
+    }
+
+    private fun showHomeworkManageDialog() {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16)) }
+        homeworks.forEach { homework ->
+            val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+            row.addView(TextView(this).apply {
+                text = homework.name; textSize = 14f; setTextColor(0xFF334155.toInt())
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(Button(this).apply {
+                text = "수정"; textSize = 11f
+                setOnClickListener { showHomeworkEditDialog(homework) }
+            })
+            row.addView(Button(this).apply {
+                text = "삭제"; textSize = 11f
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("숙제 항목 삭제")
+                        .setMessage("'${homework.name}' 숙제 항목을 삭제할까요?")
+                        .setPositiveButton("삭제") { _, _ ->
+                            val next = homeworks.filterNot { it.id == homework.id }
+                            repo.saveHomeworks(next) { result ->
+                                runOnUiThread {
+                                    if (result.isSuccess) { homeworks = next; toast("숙제 항목을 삭제했습니다.") }
+                                    else toast("삭제에 실패했습니다.")
+                                }
+                            }
+                        }.setNegativeButton("취소", null).show()
+                }
+            })
+            box.addView(row, matchWrap(bottom = 4))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("숙제 항목 관리")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("새 숙제 추가") { _, _ -> showHomeworkEditDialog(null) }
+            .setNegativeButton("닫기", null).show()
+    }
+
+    private fun showHomeworkEditDialog(existing: Homework?) {
+        val input = edit("숙제 이름", existing?.name.orEmpty())
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "새 숙제 추가" else "숙제 항목 수정")
+            .setView(input).setPositiveButton("저장", null).setNegativeButton("취소", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val name = input.text.toString().trim()
+                if (name.isBlank()) return@setOnClickListener toast("숙제 이름을 입력해 주세요.")
+                if (homeworks.any { it.name == name && it.id != existing?.id }) return@setOnClickListener toast("이미 등록된 숙제입니다.")
+                val next = (if (existing == null) homeworks + Homework(newId(), name)
+                    else homeworks.map { if (it.id == existing.id) existing.copy(name = name) else it }).sortedBy { it.name }
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                repo.saveHomeworks(next) { result ->
+                    runOnUiThread {
+                        if (result.isSuccess) { homeworks = next; dialog.dismiss(); toast(if (existing == null) "숙제 항목을 추가했습니다." else "숙제 항목을 수정했습니다.") }
+                        else { dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true; toast("저장에 실패했습니다.") }
+                    }
+                }
+            }
+        }
+        dialog.show()
     }
 
     private fun showHomeworkOptions(selected: List<Homework>) {
@@ -401,7 +496,27 @@ class MainActivity : ComponentActivity() {
         box.addView(start); box.addView(end)
         val repeat = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("반복 안 함", "매일", "평일", "매주", "매월")) }
         box.addView(label("반복")); box.addView(repeat)
-        val count = edit("반복 횟수", "2").apply { inputType = InputType.TYPE_CLASS_NUMBER }; box.addView(count)
+        box.addView(label("반복 횟수"))
+        val countPresetValues = listOf(2, 3, 5, 10, 20, 30, 60)
+        val countPreset = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, countPresetValues.map { "${it}회" } + "직접 입력")
+        }
+        val count = edit("횟수 직접 입력", "2").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        countPreset.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (position < countPresetValues.size) count.setText(countPresetValues[position].toString())
+            }
+        }
+        repeat.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val enabled = position != 0
+                countPreset.isEnabled = enabled; count.isEnabled = enabled
+                if (!enabled) count.setText("1") else if ((count.text.toString().toIntOrNull() ?: 1) < 2) count.setText("2")
+            }
+        }
+        box.addView(countPreset); box.addView(count)
         val alert = AlertDialog.Builder(this).setTitle("숙제 등록").setView(box).setPositiveButton("등록", null).setNegativeButton("취소", null).create()
         alert.setOnShowListener {
             alert.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -432,8 +547,32 @@ class MainActivity : ComponentActivity() {
         TimePickerDialog(this, { _, h, m -> input.setText(LocalTime.of(h, m).format(DateTimeFormatter.ofPattern("HH:mm"))) }, time.hour, time.minute, true).show()
     }
 
-    private fun showTodaySummary(){val today=LocalDate.now().toString();val text=members.joinToString("\n\n"){m->val es=allEvents.filter{it.date==today&&it.memberIds.contains(m.id)&&it.kind!="homework-complete"};"${m.icon} ${m.label}\n"+(if(es.isEmpty())"오늘 일정 없음" else es.joinToString("\n"){e->"${if(e.allDay)"종일" else e.start.drop(11).take(5)}  ${e.title}"})};AlertDialog.Builder(this).setTitle("📌 오늘").setMessage(text).setPositiveButton("닫기",null).show()}
-    private fun showStats(){val today=LocalDate.now().toString();val todayEvents=allEvents.count{it.date==today};val hw=allEvents.filter{it.date==today&&it.kind=="homework"};val done=hw.count{it.completed};val text="최근 불러온 일정  ${allEvents.count{it.kind=="event"}}개\n오늘 일정  ${todayEvents}개\n오늘 숙제  $done/${hw.size} 완료\n누적 완료 숙제  ${allEvents.count{it.kind=="homework"&&it.completed}}개";AlertDialog.Builder(this).setTitle("📊 가족 통계").setMessage(text).setPositiveButton("닫기",null).show()}
+    private fun showTodaySummary(){
+        val today=LocalDate.now().toString()
+        val todayEvents=allEvents.filter{it.date==today&&it.kind!="homework-complete"}
+        val hw=todayEvents.filter{it.kind=="homework"}
+        val text=buildString{
+            append(members.joinToString("\n\n"){m->
+                val es=todayEvents.filter{it.memberIds.contains(m.id)}
+                "${m.icon} ${m.label}\n"+(if(es.isEmpty())"오늘 일정 없음" else es.joinToString("\n"){e->"${if(e.kind=="homework"||e.allDay)"종일" else e.start.drop(11).take(5)}  ${e.title}"})
+            })
+            append("\n\n📝 오늘 숙제\n")
+            append(if(hw.isEmpty())"없음" else "${hw.count{it.completed}}/${hw.size} 완료")
+            notices.firstOrNull()?.let{notice->append("\n\n📣 최근 가족 메모\n${notice.title}");if(notice.body.isNotBlank())append("\n${notice.body}")}
+        }
+        AlertDialog.Builder(this).setTitle("📌 오늘").setMessage(text).setPositiveButton("닫기",null).show()
+    }
+    private fun showStats(){
+        val today=LocalDate.now(); val todayKey=today.toString(); val last30Start=today.minusDays(30).toString()
+        val last30=allEvents.count{it.kind=="event"&&it.date>=last30Start&&it.date<=todayKey}
+        val todayEvents=allEvents.count{it.date==todayKey&&it.kind!="homework-complete"}
+        val hw=allEvents.filter{it.date==todayKey&&it.kind=="homework"}
+        val rate=if(hw.isEmpty())0 else (hw.count{it.completed}*100/hw.size)
+        val completed=allEvents.count{it.kind=="homework"&&it.completed}
+        val memberLines=members.joinToString("\n"){m->"${m.icon} ${m.label}  ${allEvents.count{it.kind=="event"&&it.memberIds.contains(m.id)}}"}
+        val text="최근 30일 일정  ${last30}개\n오늘 일정  ${todayEvents}개\n오늘 숙제 완료율  ${rate}%\n누적 완료 숙제  ${completed}개\n\n구성원별 일정 수\n$memberLines"
+        AlertDialog.Builder(this).setTitle("📊 가족 통계").setMessage(text).setPositiveButton("닫기",null).show()
+    }
     private fun showNoticeInfo(){
         val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(18))}
         val title=edit("제목","");val body=edit("가족에게 남길 메모나 공지","").apply{minLines=3;gravity=Gravity.TOP}

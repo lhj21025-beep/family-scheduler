@@ -59,6 +59,23 @@ object AlarmScheduler {
         }
     }
 
+    fun showTestNotification(context: Context) {
+        createChannel(context)
+        val open = PendingIntent.getActivity(
+            context, 99001, Intent(context, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("📅 테스트 알림")
+            .setContentText("우리 가족 스케줄러 알림이 정상적으로 동작합니다.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .build()
+        runCatching { NotificationManagerCompat.from(context).notify(99001, notification) }
+    }
+
     private fun schedule(context: Context, key: String, trigger: Long, title: String, location: String, minutes: Int) {
         createChannel(context)
         val manager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager

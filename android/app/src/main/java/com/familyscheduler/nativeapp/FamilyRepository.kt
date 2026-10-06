@@ -72,6 +72,14 @@ class FamilyRepository {
             .addOnFailureListener { done(Result.failure(it)) }
     }
 
+    fun saveHomeworks(homeworks: List<Homework>, done: (Result<Unit>) -> Unit) {
+        val values = homeworks.map { mapOf("id" to it.id, "name" to it.name, "familyId" to "family-main") }
+        db.collection("familyData").document("family-main")
+            .set(mapOf("homeworks" to values), SetOptions.merge())
+            .addOnSuccessListener { done(Result.success(Unit)) }
+            .addOnFailureListener { done(Result.failure(it)) }
+    }
+
     fun saveEvent(event: FamilyEvent, done: (Result<Unit>) -> Unit) {
         val value = event.copy(createdBy = event.createdBy ?: auth.currentUser?.uid)
         db.collection("scheduleDays").document(value.date)
@@ -134,6 +142,44 @@ class FamilyRepository {
             batch.set(db.collection("scheduleDays").document(date), mapOf("date" to date, "events" to values), SetOptions.merge())
         }
         batch.commit().addOnSuccessListener { refreshWidgets(); done(Result.success(events.size)) }
+            .addOnFailureListener { done(Result.failure(it)) }
+    }
+
+    fun deleteHomeworkEvents(event: FamilyEvent, mode: String, done: (Result<Int>) -> Unit) {
+        db.collection("scheduleDays").get()
+            .addOnSuccessListener { snapshots ->
+                val batch = db.batch()
+                var count = 0
+                snapshots.documents.forEach { snapshot ->
+                    val ref = snapshot.reference
+                    parseEvents(snapshot).forEach { candidate ->
+                        val sameSeries = candidate.kind == "homework" &&
+                            candidate.homeworkId == event.homeworkId &&
+                            if (!event.homeworkSeriesId.isNullOrBlank()) {
+                                candidate.homeworkSeriesId == event.homeworkSeriesId
+                            } else {
+                                candidate.homeworkStartDate == event.homeworkStartDate &&
+                                    candidate.homeworkEndDate == event.homeworkEndDate
+                            }
+                        val shouldDelete = sameSeries && when (mode) {
+                            "one" -> candidate.id == event.id
+                            "future" -> candidate.date >= event.date
+                            else -> true
+                        }
+                        if (shouldDelete) {
+                            batch.update(ref, "events.${safeKey(candidate.id)}", FieldValue.delete())
+                            count++
+                        }
+                    }
+                }
+                if (count == 0) {
+                    done(Result.failure(IllegalStateException("삭제할 숙제 데이터를 찾지 못했습니다.")))
+                } else {
+                    batch.commit()
+                        .addOnSuccessListener { refreshWidgets(); done(Result.success(count)) }
+                        .addOnFailureListener { done(Result.failure(it)) }
+                }
+            }
             .addOnFailureListener { done(Result.failure(it)) }
     }
 

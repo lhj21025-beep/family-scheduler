@@ -661,7 +661,7 @@ export default function App() {
       count,
     );
     const blockDays = daysBetween(homeworkStartDate, homeworkEndDate);
-    const created = chosen.flatMap((h) => {
+    let created = chosen.flatMap((h) => {
       const seriesId = uid();
       return occurrenceStarts.flatMap((occStart) => {
         const occEnd = shiftDate(occStart, blockDays);
@@ -696,6 +696,44 @@ export default function App() {
           }));
       });
     });
+    // 월요일 엘리하이(영어)는 현재 화면 범위 밖의 날짜까지 Firestore를 직접 확인해
+    // 같은 날짜에 두 개가 만들어지지 않도록 한다.
+    const mondayEnglishDates = [...new Set(
+      created
+        .filter(
+          (e) =>
+            e.homeworkId === "eli-english" &&
+            new Date(`${e.start.slice(0, 10)}T12:00:00`).getDay() === 1,
+        )
+        .map((e) => e.start.slice(0, 10)),
+    )];
+    if (mondayEnglishDates.length) {
+      const snaps = await Promise.all(
+        mondayEnglishDates.map((d) => getDoc(doc(db, "scheduleDays", dayId(d)))),
+      );
+      const occupied = new Set(
+        snaps
+          .filter((s) => s.exists())
+          .flatMap((s) =>
+            Object.values((s.data() as DayDoc).events ?? {})
+              .filter(
+                (e) =>
+                  e.kind === "homework" &&
+                  e.homeworkId === "eli-english",
+              )
+              .map((e) => e.start.slice(0, 10)),
+          ),
+      );
+      created = created.filter(
+        (e) =>
+          !(
+            e.homeworkId === "eli-english" &&
+            new Date(`${e.start.slice(0, 10)}T12:00:00`).getDay() === 1 &&
+            occupied.has(e.start.slice(0, 10))
+          ),
+      );
+    }
+
     if (!created.length) return alert("선택한 숙제는 이미 등록되어 있습니다.");
     try {
       await Promise.all(created.map(writeDayEvent));

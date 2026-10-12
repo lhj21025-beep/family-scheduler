@@ -39,7 +39,20 @@ class FamilyRepository {
             .addSnapshotListener { snapshots, e ->
                 if (e != null) return@addSnapshotListener error(e)
                 val events = snapshots?.documents.orEmpty().flatMap { parseEvents(it) }.sortedBy { it.start }
-                update(events)
+                val duplicates = mutableListOf<FamilyEvent>()
+                events.filter { it.kind == "homework" && it.homeworkId == "eli-english" }
+                    .groupBy { it.date }
+                    .forEach { (date, rows) ->
+                        val day = runCatching { LocalDate.parse(date) }.getOrNull()
+                        if (day?.dayOfWeek?.value != 1 || rows.size <= 1) return@forEach
+                        val keep = rows.sortedWith(compareByDescending<FamilyEvent> { it.completed }.thenBy { it.id }).first()
+                        duplicates += rows.filter { it.id != keep.id }
+                    }
+                duplicates.forEach { duplicate ->
+                    db.collection("scheduleDays").document(duplicate.date)
+                        .update("events.${safeKey(duplicate.id)}", FieldValue.delete())
+                }
+                update(events.filterNot { item -> duplicates.any { it.id == item.id } })
             }
     }
 

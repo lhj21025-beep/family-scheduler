@@ -337,6 +337,50 @@ export default function App() {
       void Promise.all(duplicates.map(removeDayEvent)).catch(console.error);
   }, [events]);
   useEffect(() => {
+    if (!auth.currentUser || sessionStorage.getItem("monday-english-deduped")) return;
+    sessionStorage.setItem("monday-english-deduped", "1");
+    const run = async () => {
+      try {
+        const snap = await getDocs(collection(db, "scheduleDays"));
+        const batch = writeBatch(db);
+        let removed = 0;
+        snap.docs.forEach((daySnap) => {
+          const data = daySnap.data() as DayDoc;
+          const rows = Object.values(data.events ?? {}).filter(
+            (e) =>
+              e.kind === "homework" &&
+              e.homeworkId === "eli-english" &&
+              new Date(`${e.start.slice(0, 10)}T12:00:00`).getDay() === 1,
+          );
+          if (rows.length <= 1) return;
+          const keep = [...rows].sort(
+            (a, b) =>
+              Number(b.completed) - Number(a.completed) ||
+              a.id.localeCompare(b.id),
+          )[0];
+          rows.forEach((e) => {
+            if (e.id === keep.id) return;
+            batch.update(
+              daySnap.ref,
+              new FieldPath("events", eventFieldKey(e.id)),
+              deleteField(),
+            );
+            removed++;
+          });
+        });
+        if (removed) {
+          await batch.commit();
+          flash(`월요일 엘리하이(영어) 중복 ${removed}개를 정리했습니다.`);
+        }
+      } catch (e) {
+        console.error("Monday English duplicate cleanup failed", e);
+        sessionStorage.removeItem("monday-english-deduped");
+      }
+    };
+    void run();
+  }, []);
+
+  useEffect(() => {
     if (!auth.currentUser) return;
     const ref = doc(db, "familyData", FAMILY_ID);
     return onSnapshot(

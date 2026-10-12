@@ -299,14 +299,40 @@ export default function App() {
   }, [range?.start, range?.end]);
   useEffect(() => {
     if (!events.length) return;
-    const seen = new Set<string>();
     const duplicates: EventItem[] = [];
+    const exactSeen = new Set<string>();
+
+    // 기존과 동일한 완전 중복 제거
     events.forEach((e) => {
       if (e.kind !== "homework") return;
       const key = `${e.homeworkId ?? e.title}|${e.start.slice(0, 10)}|${e.homeworkStartDate ?? ""}|${e.homeworkEndDate ?? ""}`;
-      if (seen.has(key)) duplicates.push(e);
-      else seen.add(key);
+      if (exactSeen.has(key)) duplicates.push(e);
+      else exactSeen.add(key);
     });
+
+    // 월요일 엘리하이(영어)는 반복 묶음이 달라도 날짜당 반드시 1개만 유지
+    const mondayEnglish = new Map<string, EventItem[]>();
+    events.forEach((e) => {
+      if (e.kind !== "homework" || e.homeworkId !== "eli-english") return;
+      const date = e.start.slice(0, 10);
+      const d = new Date(`${date}T12:00:00`);
+      if (d.getDay() !== 1) return;
+      const list = mondayEnglish.get(date) ?? [];
+      list.push(e);
+      mondayEnglish.set(date, list);
+    });
+    mondayEnglish.forEach((list) => {
+      if (list.length <= 1) return;
+      // 이미 완료한 기록이 있으면 완료된 항목을 우선 남긴다.
+      const keep = [...list].sort((a, b) =>
+        Number(b.completed) - Number(a.completed) || a.id.localeCompare(b.id),
+      )[0];
+      list.forEach((e) => {
+        if (e.id !== keep.id && !duplicates.some((d) => d.id === e.id))
+          duplicates.push(e);
+      });
+    });
+
     if (duplicates.length)
       void Promise.all(duplicates.map(removeDayEvent)).catch(console.error);
   }, [events]);
@@ -603,7 +629,9 @@ export default function App() {
                   e.kind === "homework" &&
                   e.homeworkId === h.id &&
                   e.start.slice(0, 10) === d &&
-                  !e.completed,
+                  (h.id === "eli-english" && new Date(`${d}T12:00:00`).getDay() === 1
+                    ? true
+                    : !e.completed),
               ),
           )
           .map((d) => ({

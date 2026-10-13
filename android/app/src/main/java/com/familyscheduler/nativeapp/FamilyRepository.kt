@@ -157,24 +157,46 @@ class FamilyRepository {
             repeatStarts(start, repeat, if (repeat == "none") 1 else repeatCount).flatMap { occurrenceStart ->
                 val occurrenceEnd = occurrenceStart.plusDays(blockLength)
                 datesBetween(occurrenceStart, occurrenceEnd).map { day ->
-                    Triple(day.toString(), homework.id, homework.name)
+                    Triple(day.toString(), homework.id, homework.name.trim())
                 }
             }
         }
         if (proposed.isEmpty()) return done(Result.success(emptyList()))
+
         val dates = proposed.map { it.first }.distinct()
         val refs = dates.map { db.collection("scheduleDays").document(it) }
-        com.google.android.gms.tasks.Tasks.whenAllSuccess<DocumentSnapshot>(refs.map { it.get() })
+        val reads = refs.map { it.get(com.google.firebase.firestore.Source.SERVER) }
+
+        com.google.android.gms.tasks.Tasks.whenAllSuccess<DocumentSnapshot>(reads)
             .addOnSuccessListener { snapshots ->
-                val byDate = snapshots.associate { snap -> snap.id to parseEvents(snap).filter { it.kind == "homework" } }
-                val duplicates = proposed.filter { (date, _, name) ->
+                val byDate = snapshots.associate { snap ->
+                    snap.id to parseEvents(snap).filter { it.kind == "homework" }
+                }
+                val duplicates = proposed.filter { (date, homeworkId, name) ->
                     byDate[date].orEmpty().any { old ->
-                        cleanHomeworkTitle(old.title) == name
+                        old.homeworkId == homeworkId ||
+                            cleanHomeworkTitle(old.title).trim() == name
                     }
                 }.map { it.first to it.third }.distinct()
                 done(Result.success(duplicates))
             }
-            .addOnFailureListener { done(Result.failure(it)) }
+            .addOnFailureListener {
+                // 서버 조회가 일시적으로 실패하면 캐시 조회로 한 번 더 확인한다.
+                com.google.android.gms.tasks.Tasks.whenAllSuccess<DocumentSnapshot>(refs.map { ref -> ref.get() })
+                    .addOnSuccessListener { snapshots ->
+                        val byDate = snapshots.associate { snap ->
+                            snap.id to parseEvents(snap).filter { it.kind == "homework" }
+                        }
+                        val duplicates = proposed.filter { (date, homeworkId, name) ->
+                            byDate[date].orEmpty().any { old ->
+                                old.homeworkId == homeworkId ||
+                                    cleanHomeworkTitle(old.title).trim() == name
+                            }
+                        }.map { it.first to it.third }.distinct()
+                        done(Result.success(duplicates))
+                    }
+                    .addOnFailureListener { fallbackError -> done(Result.failure(fallbackError)) }
+            }
     }
 
     fun registerHomework(

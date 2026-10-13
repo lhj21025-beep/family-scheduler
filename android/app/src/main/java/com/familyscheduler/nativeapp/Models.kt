@@ -19,6 +19,7 @@ data class FamilyEvent(
     val homeworkEndDate: String? = null,
     val completed: Boolean = false,
     val completedAt: String? = null,
+    val completedBy: String? = null,
     val location: String? = null,
     val memo: String? = null,
     val repeat: String = "none",
@@ -45,6 +46,7 @@ data class FamilyEvent(
         homeworkEndDate?.let { put("homeworkEndDate", it) }
         put("completed", completed)
         completedAt?.let { put("completedAt", it) }
+        completedBy?.let { put("completedBy", it) }
         location?.takeIf { it.isNotBlank() }?.let { put("location", it) }
         memo?.takeIf { it.isNotBlank() }?.let { put("memo", it) }
         put("repeat", repeat); put("repeatCount", repeatCount)
@@ -76,6 +78,7 @@ data class FamilyEvent(
                 homeworkEndDate = data["homeworkEndDate"] as? String,
                 completed = data["completed"] as? Boolean ?: false,
                 completedAt = data["completedAt"] as? String,
+                completedBy = data["completedBy"] as? String,
                 location = data["location"] as? String,
                 memo = data["memo"] as? String,
                 repeat = data["repeat"] as? String ?: "none",
@@ -97,6 +100,53 @@ data class FamilyEvent(
 data class Homework(val id: String, val name: String) {
     companion object {
         fun fromMap(data: Map<*, *>) = Homework(data["id"] as? String ?: newId(), data["name"] as? String ?: "숙제")
+    }
+}
+
+data class HomeworkApproval(
+    val id: String = newId(),
+    val eventId: String = "",
+    val homeworkId: String? = null,
+    val homeworkSeriesId: String? = null,
+    val homeworkStartDate: String? = null,
+    val homeworkEndDate: String? = null,
+    val title: String = "",
+    val targetDate: String = "",
+    val requestedAt: String = nowIso(),
+    val requestedBy: String = "son",
+    val status: String = "pending",
+    val decidedAt: String? = null,
+    val decidedBy: String? = null,
+) {
+    fun toMap(): Map<String, Any> = buildMap {
+        put("id", id); put("eventId", eventId)
+        homeworkId?.let { put("homeworkId", it) }
+        homeworkSeriesId?.let { put("homeworkSeriesId", it) }
+        homeworkStartDate?.let { put("homeworkStartDate", it) }
+        homeworkEndDate?.let { put("homeworkEndDate", it) }
+        put("title", title); put("targetDate", targetDate)
+        put("requestedAt", requestedAt); put("requestedBy", requestedBy); put("status", status)
+        decidedAt?.let { put("decidedAt", it) }; decidedBy?.let { put("decidedBy", it) }
+    }
+    companion object {
+        fun fromMap(data: Map<*, *>): HomeworkApproval? {
+            val id = data["id"] as? String ?: return null
+            return HomeworkApproval(
+                id = id,
+                eventId = data["eventId"] as? String ?: "",
+                homeworkId = data["homeworkId"] as? String,
+                homeworkSeriesId = data["homeworkSeriesId"] as? String,
+                homeworkStartDate = data["homeworkStartDate"] as? String,
+                homeworkEndDate = data["homeworkEndDate"] as? String,
+                title = data["title"] as? String ?: "",
+                targetDate = data["targetDate"] as? String ?: "",
+                requestedAt = data["requestedAt"] as? String ?: "",
+                requestedBy = data["requestedBy"] as? String ?: "son",
+                status = data["status"] as? String ?: "pending",
+                decidedAt = data["decidedAt"] as? String,
+                decidedBy = data["decidedBy"] as? String,
+            )
+        }
     }
 }
 

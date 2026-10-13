@@ -44,6 +44,8 @@ fun SchedulerScreen(
     onNotice: () -> Unit,
     onStats: () -> Unit,
     onHomework: (LocalDate) -> Unit,
+    approvalCount: Int,
+    onApprovals: () -> Unit,
     onSettings: () -> Unit,
     onSearch: (String, (Result<List<FamilyEvent>>) -> Unit) -> Unit,
 ) {
@@ -89,7 +91,7 @@ fun SchedulerScreen(
                     Text("우리 가족 스케줄러", Modifier.padding(start = 8.dp).weight(1f), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     TextButton(onClick = onSettings) { Text("⚙️", fontSize = 20.sp) }
                 }
-                HorizontalActionBar(onToday, onNotice, onStats, { onHomework(selectedDate) }) { onAddEvent(selectedDate) }
+                HorizontalActionBar(onToday, onNotice, onStats, { onHomework(selectedDate) }, approvalCount, onApprovals) { onAddEvent(selectedDate) }
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -138,9 +140,10 @@ fun SchedulerScreen(
 }
 
 @Composable
-private fun HorizontalActionBar(onToday: () -> Unit, onNotice: () -> Unit, onStats: () -> Unit, onHomework: () -> Unit, onAdd: () -> Unit) {
+private fun HorizontalActionBar(onToday: () -> Unit, onNotice: () -> Unit, onStats: () -> Unit, onHomework: () -> Unit, approvalCount: Int, onApprovals: () -> Unit, onAdd: () -> Unit) {
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 3.dp)) {
         SmallAction("📌 오늘", onToday); SmallAction("📣 가족 메모", onNotice); SmallAction("📊 통계", onStats); SmallAction("📝 숙제 체크", onHomework)
+        if (approvalCount > 0) SmallAction("✅ 부모 확인 ($approvalCount)", onApprovals)
         Button(onClick = onAdd, shape = RoundedCornerShape(7.dp), contentPadding = PaddingValues(horizontal = 13.dp), modifier = Modifier.height(40.dp)) { Text("＋ 일정 추가") }
     }
 }

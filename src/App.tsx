@@ -998,6 +998,7 @@ export default function App() {
               title: `📝 ${cleanHomeworkTitle(item.title)}`,
               completed: false,
               completedAt: undefined,
+              completedBy: undefined,
             });
             batch.update(
               ref,
@@ -1941,6 +1942,11 @@ export default function App() {
                       >
                         {modal.completed ? "완료" : "미완료"}
                       </span>
+                      {modal.completed && modal.completedAt && (
+                        <div className="field-hint">
+                          완료: {new Date(modal.completedAt).toLocaleString("ko-KR")} · {memberLabel(modal.completedBy)}
+                        </div>
+                      )}
                       {!modal.completed ? (
                         <button
                           className="complete-btn wide"

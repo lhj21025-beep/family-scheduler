@@ -298,89 +298,6 @@ export default function App() {
     );
   }, [range?.start, range?.end]);
   useEffect(() => {
-    if (!events.length) return;
-    const duplicates: EventItem[] = [];
-    const exactSeen = new Set<string>();
-
-    // 기존과 동일한 완전 중복 제거
-    events.forEach((e) => {
-      if (e.kind !== "homework") return;
-      const key = `${e.homeworkId ?? e.title}|${e.start.slice(0, 10)}|${e.homeworkStartDate ?? ""}|${e.homeworkEndDate ?? ""}`;
-      if (exactSeen.has(key)) duplicates.push(e);
-      else exactSeen.add(key);
-    });
-
-    // 월요일 엘리하이(영어)는 반복 묶음이 달라도 날짜당 반드시 1개만 유지
-    const mondayEnglish = new Map<string, EventItem[]>();
-    events.forEach((e) => {
-      if (e.kind !== "homework" || e.homeworkId !== "eli-english") return;
-      const date = e.start.slice(0, 10);
-      const d = new Date(`${date}T12:00:00`);
-      if (d.getDay() !== 1) return;
-      const list = mondayEnglish.get(date) ?? [];
-      list.push(e);
-      mondayEnglish.set(date, list);
-    });
-    mondayEnglish.forEach((list) => {
-      if (list.length <= 1) return;
-      // 이미 완료한 기록이 있으면 완료된 항목을 우선 남긴다.
-      const keep = [...list].sort((a, b) =>
-        Number(b.completed) - Number(a.completed) || a.id.localeCompare(b.id),
-      )[0];
-      list.forEach((e) => {
-        if (e.id !== keep.id && !duplicates.some((d) => d.id === e.id))
-          duplicates.push(e);
-      });
-    });
-
-    if (duplicates.length)
-      void Promise.all(duplicates.map(removeDayEvent)).catch(console.error);
-  }, [events]);
-  useEffect(() => {
-    if (!auth.currentUser || sessionStorage.getItem("monday-english-deduped")) return;
-    sessionStorage.setItem("monday-english-deduped", "1");
-    const run = async () => {
-      try {
-        const snap = await getDocs(collection(db, "scheduleDays"));
-        const batch = writeBatch(db);
-        let removed = 0;
-        snap.docs.forEach((daySnap) => {
-          const data = daySnap.data() as DayDoc;
-          const rows = Object.values(data.events ?? {}).filter(
-            (e) =>
-              e.kind === "homework" &&
-              e.homeworkId === "eli-english" &&
-              new Date(`${e.start.slice(0, 10)}T12:00:00`).getDay() === 1,
-          );
-          if (rows.length <= 1) return;
-          const keep = [...rows].sort(
-            (a, b) =>
-              Number(b.completed) - Number(a.completed) ||
-              a.id.localeCompare(b.id),
-          )[0];
-          rows.forEach((e) => {
-            if (e.id === keep.id) return;
-            batch.update(
-              daySnap.ref,
-              new FieldPath("events", eventFieldKey(e.id)),
-              deleteField(),
-            );
-            removed++;
-          });
-        });
-        if (removed) {
-          await batch.commit();
-          flash(`월요일 엘리하이(영어) 중복 ${removed}개를 정리했습니다.`);
-        }
-      } catch (e) {
-        console.error("Monday English duplicate cleanup failed", e);
-        sessionStorage.removeItem("monday-english-deduped");
-      }
-    };
-    void run();
-  }, []);
-
-  useEffect(() => {
     if (!auth.currentUser) return;
     const ref = doc(db, "familyData", FAMILY_ID);
     return onSnapshot(
@@ -639,13 +556,11 @@ export default function App() {
   };
   const registerHomework = async () => {
     if (!homeworkIds.length) return;
-    if (
-      schoolOtherSelected &&
-      !schoolHomeworkDetail.trim()
-    )
+    if (schoolOtherSelected && !schoolHomeworkDetail.trim())
       return alert("어떤 학교숙제인지 입력해주세요.");
     if (homeworkEndDate < homeworkStartDate)
       return alert("종료일은 시작일과 같거나 이후로 선택해주세요.");
+
     const chosen = homeworks
       .filter((h) => homeworkIds.includes(h.id))
       .map((h) =>
@@ -661,81 +576,75 @@ export default function App() {
       count,
     );
     const blockDays = daysBetween(homeworkStartDate, homeworkEndDate);
-    let created = chosen.flatMap((h) => {
+    const created = chosen.flatMap((h) => {
       const seriesId = uid();
       return occurrenceStarts.flatMap((occStart) => {
         const occEnd = shiftDate(occStart, blockDays);
-        return dateRange(occStart, occEnd)
-          .filter(
-            (d) =>
-              !events.some(
-                (e) =>
-                  e.kind === "homework" &&
-                  e.homeworkId === h.id &&
-                  e.start.slice(0, 10) === d &&
-                  (h.id === "eli-english" && new Date(`${d}T12:00:00`).getDay() === 1
-                    ? true
-                    : !e.completed),
-              ),
-          )
-          .map((d) => ({
-            id: uid(),
-            title: `📝 ${h.name}`,
-            start: `${d}T00:00:00`,
-            end: `${d}T23:59:59`,
-            allDay: true,
-            memberIds: ["son"] as MemberId[],
-            kind: "homework" as const,
-            homeworkId: h.id,
-            homeworkSeriesId: seriesId,
-            homeworkStartDate: occStart,
-            homeworkEndDate: occEnd,
-            completed: false,
-            repeat: homeworkRepeat,
-            repeatCount: count,
-          }));
+        return dateRange(occStart, occEnd).map((d) => ({
+          id: uid(),
+          title: `📝 ${h.name}`,
+          start: `${d}T00:00:00`,
+          end: `${d}T23:59:59`,
+          allDay: true,
+          memberIds: ["son"] as MemberId[],
+          kind: "homework" as const,
+          homeworkId: h.id,
+          homeworkSeriesId: seriesId,
+          homeworkStartDate: occStart,
+          homeworkEndDate: occEnd,
+          completed: false,
+          repeat: homeworkRepeat,
+          repeatCount: count,
+        }));
       });
     });
-    // 월요일 엘리하이(영어)는 현재 화면 범위 밖의 날짜까지 Firestore를 직접 확인해
-    // 같은 날짜에 두 개가 만들어지지 않도록 한다.
-    const mondayEnglishDates = [...new Set(
-      created
-        .filter(
-          (e) =>
-            e.homeworkId === "eli-english" &&
-            new Date(`${e.start.slice(0, 10)}T12:00:00`).getDay() === 1,
-        )
-        .map((e) => e.start.slice(0, 10)),
-    )];
-    if (mondayEnglishDates.length) {
-      const snaps = await Promise.all(
-        mondayEnglishDates.map((d) => getDoc(doc(db, "scheduleDays", dayId(d)))),
-      );
-      const occupied = new Set(
-        snaps
-          .filter((s) => s.exists())
-          .flatMap((s) =>
-            Object.values((s.data() as DayDoc).events ?? {})
-              .filter(
-                (e) =>
-                  e.kind === "homework" &&
-                  e.homeworkId === "eli-english",
-              )
-              .map((e) => e.start.slice(0, 10)),
-          ),
-      );
-      created = created.filter(
-        (e) =>
-          !(
-            e.homeworkId === "eli-english" &&
-            new Date(`${e.start.slice(0, 10)}T12:00:00`).getDay() === 1 &&
-            occupied.has(e.start.slice(0, 10))
-          ),
-      );
-    }
 
-    if (!created.length) return alert("선택한 숙제는 이미 등록되어 있습니다.");
     try {
+      const dates = [...new Set(created.map((e) => e.start.slice(0, 10)))];
+      const snaps = await Promise.all(
+        dates.map((d) => getDoc(doc(db, "scheduleDays", dayId(d)))),
+      );
+      const existingByDate = new Map<string, EventItem[]>();
+      snaps.forEach((snap) => {
+        if (!snap.exists()) return;
+        existingByDate.set(
+          snap.id,
+          Object.values((snap.data() as DayDoc).events ?? {}).filter(
+            (e) => e.kind === "homework",
+          ),
+        );
+      });
+
+      const duplicateRows = created.filter((next) => {
+        const date = next.start.slice(0, 10);
+        const nextName = cleanHomeworkTitle(next.title);
+        return (existingByDate.get(date) ?? []).some((old) => {
+          if (old.homeworkId !== next.homeworkId) return false;
+          // 학교숙제(기타)는 상세 내용까지 같을 때만 같은 숙제로 본다.
+          if (next.homeworkId === "school-other")
+            return cleanHomeworkTitle(old.title) === nextName;
+          return true;
+        });
+      });
+
+      if (duplicateRows.length) {
+        const unique = [...new Map(
+          duplicateRows.map((e) => [
+            `${e.start.slice(0, 10)}|${cleanHomeworkTitle(e.title)}`,
+            e,
+          ]),
+        ).values()];
+        const preview = unique
+          .slice(0, 8)
+          .map((e) => `• ${e.start.slice(0, 10)}  ${cleanHomeworkTitle(e.title)}`)
+          .join("\n");
+        const more = unique.length > 8 ? `\n외 ${unique.length - 8}건` : "";
+        const ok = confirm(
+          `이미 같은 숙제가 등록된 날짜가 있습니다.\n\n${preview}${more}\n\n그래도 중복으로 등록할까요?`,
+        );
+        if (!ok) return;
+      }
+
       await Promise.all(created.map(writeDayEvent));
       setHomeworkOpen(false);
       setHomeworkIds([]);
@@ -744,7 +653,11 @@ export default function App() {
       setHomeworkEndDate(today);
       setHomeworkRepeat("none");
       setHomeworkRepeatCount(1);
-      flash(`${created.length}개 숙제를 등록했습니다.`);
+      flash(
+        duplicateRows.length
+          ? `${created.length}개 숙제를 등록했습니다. (중복 포함)`
+          : `${created.length}개 숙제를 등록했습니다.`,
+      );
     } catch (e) {
       console.error(e);
       alert("숙제 등록에 실패했습니다.");

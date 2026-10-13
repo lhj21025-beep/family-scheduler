@@ -653,8 +653,8 @@ export default function App() {
         existing.some(
           (e) =>
             e.kind === "homework" &&
-            e.homeworkId === p.homeworkId &&
-            e.start.slice(0, 10) === p.start.slice(0, 10),
+            e.start.slice(0, 10) === p.start.slice(0, 10) &&
+            cleanHomeworkTitle(e.title) === cleanHomeworkTitle(p.title),
         ),
       );
       if (duplicatePairs.length) {

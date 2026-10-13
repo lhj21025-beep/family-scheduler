@@ -301,6 +301,14 @@ class FamilyRepository {
                 decidedBy = signedMember(),
             )
             transaction.update(familyRef, "approvalRequests.${request.id}", decided.toMap())
+            val alertDate = runCatching {
+                LocalDateTime.parse(current.requestedAt).plusMinutes(1).toLocalDate().toString()
+            }.getOrElse { LocalDate.now().toString() }
+            transaction.update(
+                db.collection("scheduleDays").document(alertDate),
+                "events.${safeKey("approval_alert_${request.id}")}",
+                FieldValue.delete()
+            )
             changed
         }.addOnSuccessListener { refreshWidgets(); done(Result.success(it)) }
             .addOnFailureListener { done(Result.failure(it)) }

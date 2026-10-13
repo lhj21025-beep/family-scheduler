@@ -20,6 +20,8 @@ data class FamilyEvent(
     val completed: Boolean = false,
     val completedAt: String? = null,
     val completedBy: String? = null,
+    val approvedAt: String? = null,
+    val approvedBy: String? = null,
     val location: String? = null,
     val memo: String? = null,
     val repeat: String = "none",
@@ -47,6 +49,8 @@ data class FamilyEvent(
         put("completed", completed)
         completedAt?.let { put("completedAt", it) }
         completedBy?.let { put("completedBy", it) }
+        approvedAt?.let { put("approvedAt", it) }
+        approvedBy?.let { put("approvedBy", it) }
         location?.takeIf { it.isNotBlank() }?.let { put("location", it) }
         memo?.takeIf { it.isNotBlank() }?.let { put("memo", it) }
         put("repeat", repeat); put("repeatCount", repeatCount)
@@ -79,6 +83,8 @@ data class FamilyEvent(
                 completed = data["completed"] as? Boolean ?: false,
                 completedAt = data["completedAt"] as? String,
                 completedBy = data["completedBy"] as? String,
+                approvedAt = data["approvedAt"] as? String,
+                approvedBy = data["approvedBy"] as? String,
                 location = data["location"] as? String,
                 memo = data["memo"] as? String,
                 repeat = data["repeat"] as? String ?: "none",

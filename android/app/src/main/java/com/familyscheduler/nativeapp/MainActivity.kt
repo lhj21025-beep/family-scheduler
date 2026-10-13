@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
     private var allEvents = emptyList<FamilyEvent>()
     private var homeworks = defaultHomeworks
     private var notices = emptyList<FamilyNotice>()
+    private var approvals by mutableStateOf(emptyList<HomeworkApproval>())
     private val visibleMembers = members.map { it.id }.toMutableSet()
     private var viewMode = "week"
     private var searchQuery = ""
@@ -119,13 +120,17 @@ class MainActivity : ComponentActivity() {
                 onNotice = { showNoticeInfo() },
                 onStats = { showStats() },
                 onHomework = { date -> selectedDate = date; showHomeworkDialog() },
+                approvalCount = if (repo.signedMember() == "me" || repo.signedMember() == "wife") approvals.count { it.status == "pending" } else 0,
+                onApprovals = { showApprovalRequests() },
                 onSettings = { showSettings() },
                 onSearch = { term, done -> repo.searchEvents(term, done) },
             )
         }
         repo.listenHomeworks { runOnUiThread { homeworks = it } }
         repo.listenNotices { runOnUiThread { notices = it } }
+        repo.listenApprovals { rows -> runOnUiThread { approvals = rows } }
         requestNotificationPermission()
+        repo.registerPushToken()
         listenMonth()
     }
 
@@ -278,22 +283,84 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun memberName(id: String?): String = when (id) {
+        "me" -> "아빠"
+        "wife" -> "엄마"
+        "son" -> "강천"
+        else -> id ?: "알 수 없음"
+    }
+
     private fun showEventDetails(event: FamilyEvent) {
         val message = buildString {
             append(if (event.allDay) "종일" else event.start.drop(11).take(5))
             event.location?.takeIf { it.isNotBlank() }?.let { append("\n장소: $it") }
             event.memo?.takeIf { it.isNotBlank() }?.let { append("\n\n$it") }
+            if (event.kind == "homework" && event.completed && !event.completedAt.isNullOrBlank()) {
+                val completedText = runCatching {
+                    java.time.LocalDateTime.parse(event.completedAt)
+                        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                }.getOrElse { event.completedAt ?: "" }
+                append("\n\n완료: $completedText · ${memberName(event.completedBy)}")
+            }
         }
         val dialog = AlertDialog.Builder(this).setTitle(event.title).setMessage(message)
         when (event.kind) {
             "homework" -> {
                 dialog.setPositiveButton(if (event.completed) "완료 되돌리기" else "숙제 완료") { _, _ ->
-                    repo.setHomeworkCompleted(event, !event.completed) { result -> runOnUiThread { toast(if (result.isSuccess) "숙제 상태를 변경했습니다." else "변경에 실패했습니다: ${result.exceptionOrNull()?.message}") } }
+                    if (!event.completed && repo.signedMember() == "son" && event.date >= LocalDate.now().plusDays(2).toString()) {
+                        repo.requestHomeworkApproval(event) { result ->
+                            runOnUiThread {
+                                toast(
+                                    if (result.isSuccess)
+                                        "부모 확인이 필요합니다. 아빠·엄마에게 승인 요청을 보냈습니다."
+                                    else result.exceptionOrNull()?.message ?: "부모 확인 요청에 실패했습니다."
+                                )
+                            }
+                        }
+                    } else {
+                        repo.setHomeworkCompleted(event, !event.completed) { result ->
+                            runOnUiThread {
+                                toast(if (result.isSuccess) "숙제 상태를 변경했습니다." else "변경에 실패했습니다: ${result.exceptionOrNull()?.message}")
+                            }
+                        }
+                    }
                 }.setNeutralButton("삭제") { _, _ -> showHomeworkDeleteOptions(event) }
             }
             "event" -> dialog.setPositiveButton("수정") { _, _ -> showEventEditor(event) }.setNeutralButton("삭제") { _, _ -> confirmDelete(event) }
         }
         dialog.setNegativeButton("닫기", null).show()
+    }
+
+    private fun showApprovalRequests() {
+        if (repo.signedMember() != "me" && repo.signedMember() != "wife") return
+        val pending = approvals.filter { it.status == "pending" }
+        if (pending.isEmpty()) return toast("대기 중인 부모 확인 요청이 없습니다.")
+        val labels = pending.map {
+            "${it.targetDate} · ${it.title}\n요청: ${memberName(it.requestedBy)} ${it.requestedAt.take(16).replace('T',' ')}"
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("✅ 부모 확인")
+            .setItems(labels) { _, which -> showApprovalDecision(pending[which]) }
+            .setNegativeButton("닫기", null)
+            .show()
+    }
+
+    private fun showApprovalDecision(request: HomeworkApproval) {
+        AlertDialog.Builder(this)
+            .setTitle(request.title)
+            .setMessage("숙제일: ${request.targetDate}\n요청자: ${memberName(request.requestedBy)}\n\n오늘 기준 이틀 이후 숙제를 미리 완료하려는 요청입니다.")
+            .setPositiveButton("OK · 완료 승인") { _, _ ->
+                repo.decideHomeworkApproval(request, true) { result ->
+                    runOnUiThread { toast(if (result.isSuccess) "숙제 완료를 승인했습니다." else result.exceptionOrNull()?.message ?: "승인에 실패했습니다.") }
+                }
+            }
+            .setNeutralButton("거절") { _, _ ->
+                repo.decideHomeworkApproval(request, false) { result ->
+                    runOnUiThread { toast(if (result.isSuccess) "숙제 완료 요청을 거절했습니다." else result.exceptionOrNull()?.message ?: "거절 처리에 실패했습니다.") }
+                }
+            }
+            .setNegativeButton("취소", null)
+            .show()
     }
 
     private fun showHomeworkDeleteOptions(event: FamilyEvent) {
@@ -531,7 +598,39 @@ class MainActivity : ComponentActivity() {
                 val repeatCode = repeatCodes[repeat.selectedItemPosition]
                 val total = count.text.toString().toIntOrNull()?.coerceIn(1, 365) ?: 1
                 alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                repo.registerHomework(resolvedSelected, startDate, endDate, repeatCode, total) { result -> runOnUiThread { alert.dismiss(); toast(if (result.isSuccess) "${result.getOrDefault(0)}개 숙제를 등록했습니다." else "숙제 등록에 실패했습니다.") } }
+                repo.checkHomeworkDuplicates(resolvedSelected, startDate, endDate, repeatCode, total) { duplicateResult ->
+                    runOnUiThread {
+                        if (duplicateResult.isFailure) {
+                            alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                            toast("중복 숙제 확인에 실패했습니다.")
+                            return@runOnUiThread
+                        }
+                        val duplicates = duplicateResult.getOrDefault(emptyList())
+                        val registerNow = {
+                            repo.registerHomework(resolvedSelected, startDate, endDate, repeatCode, total) { result ->
+                                runOnUiThread {
+                                    alert.dismiss()
+                                    toast(if (result.isSuccess) "${result.getOrDefault(0)}개 숙제를 등록했습니다." else "숙제 등록에 실패했습니다.")
+                                }
+                            }
+                        }
+                        if (duplicates.isEmpty()) {
+                            registerNow()
+                        } else {
+                            alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                            val preview = duplicates.take(6).joinToString("\n") { "${it.first} · ${it.second}" }
+                            AlertDialog.Builder(this@MainActivity)
+                                .setTitle("중복 숙제 확인")
+                                .setMessage("동일한 숙제가 이미 등록되어 있습니다.\n\n$preview${if (duplicates.size > 6) "\n외 ${duplicates.size - 6}개" else ""}\n\n그래도 중복으로 등록할까요?")
+                                .setPositiveButton("그래도 등록") { _, _ ->
+                                    alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                                    registerNow()
+                                }
+                                .setNegativeButton("취소", null)
+                                .show()
+                        }
+                    }
+                }
             }
         }
         alert.show()

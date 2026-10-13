@@ -15,6 +15,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  runTransaction,
   setDoc,
   updateDoc,
   where,
@@ -40,6 +41,7 @@ type EventItem = {
   homeworkEndDate?: string;
   completed?: boolean;
   completedAt?: string;
+  completedBy?: MemberId;
   location?: string;
   memo?: string;
   repeat?: Repeat;
@@ -64,7 +66,27 @@ type Notice = {
   familyId?: string;
 };
 type DayDoc = { date: string; events?: Record<string, EventItem> };
-type FamilyDoc = { homeworks: Homework[]; notices: Notice[] };
+type HomeworkApproval = {
+  id: string;
+  eventId: string;
+  homeworkId?: string;
+  homeworkSeriesId?: string;
+  homeworkStartDate?: string;
+  homeworkEndDate?: string;
+  title: string;
+  targetDate: string;
+  requestedAt: string;
+  requestedBy: MemberId;
+  status: "pending" | "approved" | "rejected";
+  decidedAt?: string;
+  decidedBy?: MemberId;
+  notificationSentAt?: string;
+};
+type FamilyDoc = {
+  homeworks: Homework[];
+  notices: Notice[];
+  approvalRequests?: Record<string, HomeworkApproval>;
+};
 const FAMILY_ID = "family-main";
 const members = [
   { id: "me" as MemberId, label: "아빠", icon: "👨", color: "#4285f4" },
@@ -242,6 +264,8 @@ export default function App() {
     [settingsOpen, setSettingsOpen] = useState(false),
     [memoTitle, setMemoTitle] = useState(""),
     [memoBody, setMemoBody] = useState(""),
+    [approvalRequests, setApprovalRequests] = useState<HomeworkApproval[]>([]),
+    [approvalOpen, setApprovalOpen] = useState(false),
     [homeworkDeleteOpen, setHomeworkDeleteOpen] = useState(false),
     [homeworkDeleteTarget, setHomeworkDeleteTarget] =
       useState<EventItem | null>(null);
@@ -313,6 +337,11 @@ export default function App() {
           setNotices(
             (data.notices ?? []).sort((a, b) =>
               b.createdAt.localeCompare(a.createdAt),
+            ),
+          );
+          setApprovalRequests(
+            Object.values(data.approvalRequests ?? {}).sort((a, b) =>
+              b.requestedAt.localeCompare(a.requestedAt),
             ),
           );
         } else {
@@ -568,15 +597,10 @@ export default function App() {
           ? { ...h, name: `학교숙제 · ${schoolHomeworkDetail.trim()}` }
           : h,
       );
-    const count =
-      homeworkRepeat === "none" ? 1 : clampRepeatCount(homeworkRepeatCount);
-    const occurrenceStarts = homeworkRepeatDates(
-      homeworkStartDate,
-      homeworkRepeat,
-      count,
-    );
+    const count = homeworkRepeat === "none" ? 1 : clampRepeatCount(homeworkRepeatCount);
+    const occurrenceStarts = homeworkRepeatDates(homeworkStartDate, homeworkRepeat, count);
     const blockDays = daysBetween(homeworkStartDate, homeworkEndDate);
-    const created = chosen.flatMap((h) => {
+    const proposed = chosen.flatMap((h) => {
       const seriesId = uid();
       return occurrenceStarts.flatMap((occStart) => {
         const occEnd = shiftDate(occStart, blockDays);
@@ -600,52 +624,28 @@ export default function App() {
     });
 
     try {
-      const dates = [...new Set(created.map((e) => e.start.slice(0, 10)))];
-      const snaps = await Promise.all(
-        dates.map((d) => getDoc(doc(db, "scheduleDays", dayId(d)))),
+      const dates = [...new Set(proposed.map((e) => e.start.slice(0, 10)))];
+      const snaps = await Promise.all(dates.map((d) => getDoc(doc(db, "scheduleDays", dayId(d)))));
+      const existing = snaps.flatMap((snap) =>
+        snap.exists() ? Object.values((snap.data() as DayDoc).events ?? {}) : [],
       );
-      const existingByDate = new Map<string, EventItem[]>();
-      snaps.forEach((snap) => {
-        if (!snap.exists()) return;
-        existingByDate.set(
-          snap.id,
-          Object.values((snap.data() as DayDoc).events ?? {}).filter(
-            (e) => e.kind === "homework",
-          ),
-        );
-      });
-
-      const duplicateRows = created.filter((next) => {
-        const date = next.start.slice(0, 10);
-        const nextName = cleanHomeworkTitle(next.title);
-        return (existingByDate.get(date) ?? []).some((old) => {
-          if (old.homeworkId !== next.homeworkId) return false;
-          // 학교숙제(기타)는 상세 내용까지 같을 때만 같은 숙제로 본다.
-          if (next.homeworkId === "school-other")
-            return cleanHomeworkTitle(old.title) === nextName;
-          return true;
-        });
-      });
-
-      if (duplicateRows.length) {
-        const unique = [...new Map(
-          duplicateRows.map((e) => [
-            `${e.start.slice(0, 10)}|${cleanHomeworkTitle(e.title)}`,
-            e,
-          ]),
-        ).values()];
-        const preview = unique
-          .slice(0, 8)
-          .map((e) => `• ${e.start.slice(0, 10)}  ${cleanHomeworkTitle(e.title)}`)
-          .join("\n");
-        const more = unique.length > 8 ? `\n외 ${unique.length - 8}건` : "";
+      const duplicatePairs = proposed.filter((p) =>
+        existing.some(
+          (e) =>
+            e.kind === "homework" &&
+            e.homeworkId === p.homeworkId &&
+            e.start.slice(0, 10) === p.start.slice(0, 10),
+        ),
+      );
+      if (duplicatePairs.length) {
+        const duplicateDates = [...new Set(duplicatePairs.map((e) => e.start.slice(0, 10)))];
         const ok = confirm(
-          `이미 같은 숙제가 등록된 날짜가 있습니다.\n\n${preview}${more}\n\n그래도 중복으로 등록할까요?`,
+          `동일한 숙제가 이미 등록된 날짜가 ${duplicateDates.length}일 있습니다.\n${duplicateDates.slice(0, 6).join(", ")}${duplicateDates.length > 6 ? " 외" : ""}\n\n그래도 중복으로 등록할까요?`,
         );
         if (!ok) return;
       }
 
-      await Promise.all(created.map(writeDayEvent));
+      await Promise.all(proposed.map(writeDayEvent));
       setHomeworkOpen(false);
       setHomeworkIds([]);
       setSchoolHomeworkDetail("");
@@ -653,11 +653,7 @@ export default function App() {
       setHomeworkEndDate(today);
       setHomeworkRepeat("none");
       setHomeworkRepeatCount(1);
-      flash(
-        duplicateRows.length
-          ? `${created.length}개 숙제를 등록했습니다. (중복 포함)`
-          : `${created.length}개 숙제를 등록했습니다.`,
-      );
+      flash(`${proposed.length}개 숙제를 등록했습니다.`);
     } catch (e) {
       console.error(e);
       alert("숙제 등록에 실패했습니다.");
@@ -697,8 +693,125 @@ export default function App() {
       alert("숙제 삭제에 실패했습니다.");
     }
   };
+  const memberLabel = (id?: MemberId) =>
+    members.find((m) => m.id === id)?.label ?? id ?? "알 수 없음";
+
+  const requestHomeworkApproval = async (e: EventItem) => {
+    if (!currentMember) return;
+    const existing = approvalRequests.find(
+      (r) => r.status === "pending" && r.eventId === e.id,
+    );
+    if (existing) {
+      alert("이미 부모 확인을 요청한 숙제입니다.");
+      return;
+    }
+    const request: HomeworkApproval = {
+      id: uid(),
+      eventId: e.id,
+      homeworkId: e.homeworkId,
+      homeworkSeriesId: e.homeworkSeriesId,
+      homeworkStartDate: e.homeworkStartDate,
+      homeworkEndDate: e.homeworkEndDate,
+      title: cleanHomeworkTitle(e.title),
+      targetDate: e.start.slice(0, 10),
+      requestedAt: new Date().toISOString(),
+      requestedBy: currentMember,
+      status: "pending",
+    };
+    await setDoc(
+      doc(db, "familyData", FAMILY_ID),
+      { approvalRequests: { [request.id]: stripUndefined(request) } },
+      { merge: true },
+    );
+    alert("오늘 기준 이틀 이후의 숙제라 부모 확인이 필요합니다. 아빠·엄마에게 승인 요청을 보냈습니다.");
+  };
+
+  const decideHomeworkApproval = async (
+    request: HomeworkApproval,
+    approve: boolean,
+  ) => {
+    if (currentMember !== "me" && currentMember !== "wife") return;
+    const now = new Date();
+    const familyRef = doc(db, "familyData", FAMILY_ID);
+    try {
+      await runTransaction(db, async (transaction) => {
+        const familySnap = await transaction.get(familyRef);
+        const familyData = familySnap.data() as Partial<FamilyDoc> | undefined;
+        const current = familyData?.approvalRequests?.[request.id];
+        if (!current || current.status !== "pending")
+          throw new Error("이미 다른 보호자가 처리한 요청입니다.");
+
+        const startDate = current.homeworkStartDate ?? current.targetDate;
+        const endDate = current.homeworkEndDate ?? current.targetDate;
+        const dates = [...new Set(dateRange(startDate, endDate))];
+        const refs = dates.map((d) => doc(db, "scheduleDays", dayId(d)));
+        const snaps = await Promise.all(refs.map((ref) => transaction.get(ref)));
+
+        if (approve) {
+          let changed = 0;
+          snaps.forEach((snap, index) => {
+            if (!snap.exists()) return;
+            const rows = Object.values((snap.data() as DayDoc).events ?? {});
+            rows.forEach((item) => {
+              const same =
+                item.kind === "homework" &&
+                item.homeworkId === current.homeworkId &&
+                (current.homeworkSeriesId
+                  ? item.homeworkSeriesId === current.homeworkSeriesId &&
+                    item.homeworkStartDate === startDate &&
+                    item.homeworkEndDate === endDate
+                  : item.id === current.eventId);
+              if (!same || item.completed) return;
+              transaction.update(
+                refs[index],
+                new FieldPath("events", eventFieldKey(item.id)),
+                stripUndefined({
+                  ...item,
+                  title: `✅ ${cleanHomeworkTitle(item.title)}`,
+                  completed: true,
+                  completedAt: now.toISOString(),
+                  completedBy: currentMember,
+                }),
+              );
+              changed++;
+            });
+          });
+          if (!changed) throw new Error("승인할 숙제 데이터를 찾지 못했습니다.");
+        }
+
+        transaction.update(
+          familyRef,
+          new FieldPath("approvalRequests", request.id),
+          stripUndefined({
+            ...current,
+            status: approve ? "approved" : "rejected",
+            decidedAt: now.toISOString(),
+            decidedBy: currentMember,
+          }),
+        );
+      });
+      setApprovalOpen(false);
+      flash(approve ? "숙제 완료를 승인했습니다." : "숙제 완료 요청을 거절했습니다.");
+    } catch (err) {
+      console.error(err);
+      alert(err instanceof Error ? err.message : "부모 확인 처리에 실패했습니다.");
+    }
+  };
+
   const completeHomework = async (e: EventItem) => {
     if (e.completed) return;
+    if (
+      currentMember === "son" &&
+      e.start.slice(0, 10) >= shiftDate(today, 2)
+    ) {
+      try {
+        await requestHomeworkApproval(e);
+      } catch (err) {
+        console.error(err);
+        alert("부모 확인 요청을 저장하지 못했습니다.");
+      }
+      return;
+    }
     const now = new Date();
     const clickedDate = e.start.slice(0, 10);
     const startDate = e.homeworkStartDate ?? clickedDate;
@@ -732,6 +845,7 @@ export default function App() {
               title: `✅ ${cleanHomeworkTitle(x.title)}`,
               completed: true,
               completedAt: now.toISOString(),
+              completedBy: currentMember ?? undefined,
             });
             const map = byDate.get(s.id) ?? {};
             map[eventFieldKey(x.id)] = next;
@@ -753,6 +867,7 @@ export default function App() {
             title: `✅ ${cleanHomeworkTitle(clickedItem.title)}`,
             completed: true,
             completedAt: now.toISOString(),
+              completedBy: currentMember ?? undefined,
           });
           byDate.set(clickedDate, { [eventFieldKey(clickedItem.id)]: next });
           count = 1;
@@ -1101,6 +1216,12 @@ export default function App() {
           >
             📝 숙제 체크
           </button>
+          {(currentMember === "me" || currentMember === "wife") &&
+            approvalRequests.some((r) => r.status === "pending") && (
+              <button onClick={() => setApprovalOpen(true)}>
+                ✅ 부모 확인 ({approvalRequests.filter((r) => r.status === "pending").length})
+              </button>
+            )}
           <button
             className="add-btn"
             onClick={() =>
@@ -1347,6 +1468,32 @@ export default function App() {
               <strong>{x.count}</strong>
             </div>
           ))}
+        </div>
+      )}
+      {approvalOpen && (
+        <div className="modal-backdrop" onClick={(e) => closeBackdrop(e, () => setApprovalOpen(false))}>
+          <div className="modal homework-modal">
+            <div className="modal-header">
+              <h2>✅ 부모 확인</h2>
+              <button onClick={() => setApprovalOpen(false)}>×</button>
+            </div>
+            <div className="notice-list">
+              {approvalRequests.filter((r) => r.status === "pending").map((r) => (
+                <article key={r.id}>
+                  <b>{r.title}</b>
+                  <small>
+                    숙제일 {r.targetDate} · 요청 {new Date(r.requestedAt).toLocaleString("ko-KR")} · {memberLabel(r.requestedBy)}
+                  </small>
+                  <p>오늘 기준 이틀 이후 숙제를 미리 완료하려는 요청입니다.</p>
+                  <div className="setting-actions">
+                    <button className="save-btn" onClick={() => void decideHomeworkApproval(r, true)}>OK · 완료 승인</button>
+                    <button onClick={() => void decideHomeworkApproval(r, false)}>거절</button>
+                  </div>
+                </article>
+              ))}
+              {!approvalRequests.some((r) => r.status === "pending") && <p>대기 중인 부모 확인 요청이 없습니다.</p>}
+            </div>
+          </div>
         </div>
       )}
       {settingsOpen && (
@@ -1675,6 +1822,11 @@ export default function App() {
                   >
                     {modal.completed ? "완료" : "미완료"}
                   </span>
+                  {modal.completed && modal.completedAt && (
+                    <div className="field-hint">
+                      완료: {new Date(modal.completedAt).toLocaleString("ko-KR")} · {memberLabel(modal.completedBy)}
+                    </div>
+                  )}
                   <p>
                     {modal.homeworkStartDate && modal.homeworkEndDate
                       ? `숙제 기간 · ${modal.homeworkStartDate} ~ ${modal.homeworkEndDate}`

@@ -300,7 +300,14 @@ class MainActivity : ComponentActivity() {
                     java.time.LocalDateTime.parse(event.completedAt)
                         .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
                 }.getOrElse { event.completedAt ?: "" }
-                append("\n\n완료: $completedText · ${memberName(event.completedBy)}")
+                append("\n\n완료 버튼: $completedText · ${memberName(event.completedBy)}")
+                if (!event.approvedAt.isNullOrBlank()) {
+                    val approvedText = runCatching {
+                        java.time.LocalDateTime.parse(event.approvedAt)
+                            .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                    }.getOrElse { event.approvedAt ?: "" }
+                    append("\n부모 승인: $approvedText · ${memberName(event.approvedBy)}")
+                }
             }
         }
         val dialog = AlertDialog.Builder(this).setTitle(event.title).setMessage(message)

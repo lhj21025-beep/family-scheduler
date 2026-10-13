@@ -167,10 +167,9 @@ class FamilyRepository {
         com.google.android.gms.tasks.Tasks.whenAllSuccess<DocumentSnapshot>(refs.map { it.get() })
             .addOnSuccessListener { snapshots ->
                 val byDate = snapshots.associate { snap -> snap.id to parseEvents(snap).filter { it.kind == "homework" } }
-                val duplicates = proposed.filter { (date, homeworkId, name) ->
+                val duplicates = proposed.filter { (date, _, name) ->
                     byDate[date].orEmpty().any { old ->
-                        old.homeworkId == homeworkId &&
-                            (homeworkId != "school-other" || cleanHomeworkTitle(old.title) == name)
+                        cleanHomeworkTitle(old.title) == name
                     }
                 }.map { it.first to it.third }.distinct()
                 done(Result.success(duplicates))

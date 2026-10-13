@@ -22,11 +22,12 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
+import { listenForegroundPush, registerPushForMember } from "./fcm";
 
 type MemberId = "me" | "wife" | "son";
 type Repeat = "none" | "daily" | "weekdays" | "weekly" | "monthly" | "lunarYearly";
 type RepeatEndMode = "count" | "date";
-type Alarm = 5 | 10 | 30 | 60;
+type Alarm = 0 | 5 | 10 | 30 | 60;
 type EventItem = {
   id: string;
   title: string;
@@ -34,7 +35,7 @@ type EventItem = {
   end?: string;
   allDay?: boolean;
   memberIds: MemberId[];
-  kind?: "event" | "homework" | "homework-complete";
+  kind?: "event" | "homework" | "homework-complete" | "approval-alert";
   homeworkId?: string;
   homeworkSeriesId?: string;
   homeworkStartDate?: string;
@@ -432,8 +433,27 @@ export default function App() {
     const el = e.currentTarget;
     setTimeout(() => el.select(), 0);
   };
+  useEffect(() => {
+    if (!currentMember || !("Notification" in window) || Notification.permission !== "granted") return;
+    void registerPushForMember(currentMember).catch((error) =>
+      console.warn("FCM token refresh skipped", error),
+    );
+  }, [currentMember]);
+
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    void listenForegroundPush((title, body) => {
+      flash(title);
+      if ("Notification" in window && Notification.permission === "granted")
+        new Notification(title, { body });
+    }).then((unsubscribe) => {
+      stop = unsubscribe;
+    });
+    return () => stop?.();
+  }, []);
+
   const visible = useMemo(
-    () => events.filter((e) => e.memberIds.some((m) => selected.includes(m))),
+    () => events.filter((e) => e.kind !== "approval-alert" && e.memberIds.some((m) => selected.includes(m))),
     [events, selected],
   );
   const calendarEvents = visible.map((e) => {
@@ -723,6 +743,22 @@ export default function App() {
       { approvalRequests: { [request.id]: stripUndefined(request) } },
       { merge: true },
     );
+
+    // 이미 배포되어 있는 일정 푸시 경로를 그대로 사용한다.
+    // 다음 1분 시점의 숨김 알림 이벤트를 부모 계정 대상으로 만들어 백그라운드 푸시를 보낸다.
+    const pushAt = new Date(Date.now() + 60000);
+    const alertEvent: EventItem = {
+      id: `approval_alert_${request.id}`,
+      title: `✅ 부모 확인 필요 · ${request.title}`,
+      start: dateTime(pushAt),
+      end: dateTime(new Date(pushAt.getTime() + 5 * 60000)),
+      memberIds: ["me", "wife"],
+      kind: "approval-alert",
+      memo: `강천이 ${request.targetDate} 숙제를 미리 완료하려고 합니다. 앱에서 승인 또는 거절해 주세요.`,
+      alarmMinutes: [0 as Alarm],
+      familyId: FAMILY_ID,
+    };
+    await writeDayEvent(alertEvent);
     alert("오늘 기준 이틀 이후의 숙제라 부모 확인이 필요합니다. 아빠·엄마에게 승인 요청을 보냈습니다.");
   };
 
@@ -1064,12 +1100,17 @@ export default function App() {
   const requestNotifications = async () => {
     if (!("Notification" in window))
       return alert("이 브라우저는 알림을 지원하지 않습니다.");
-    const p = await Notification.requestPermission();
-    flash(
-      p === "granted"
-        ? "알림 권한이 허용되었습니다."
-        : "알림 권한이 허용되지 않았습니다.",
-    );
+    if (!currentMember) return alert("로그인한 가족 구성원을 확인하지 못했습니다.");
+    try {
+      await registerPushForMember(currentMember);
+      flash("알림 권한과 백그라운드 푸시가 등록되었습니다.");
+    } catch (error) {
+      console.error(error);
+      const p = await Notification.requestPermission();
+      if (p === "granted")
+        flash("브라우저 알림은 허용됐지만 백그라운드 푸시 등록은 확인이 필요합니다.");
+      else flash("알림 권한이 허용되지 않았습니다.");
+    }
   };
   const testNotification = () => {
     if (!("Notification" in window) || Notification.permission !== "granted")
@@ -1090,6 +1131,7 @@ export default function App() {
       const needle = term.toLocaleLowerCase("ko-KR");
       const rows = snap.docs
         .flatMap((d) => Object.values((d.data() as DayDoc).events ?? {}))
+        .filter((e) => e.kind !== "approval-alert")
         .filter((e) => {
           const family = e.memberIds
             .map((id) => members.find((m) => m.id === id)?.label ?? "")
@@ -1144,8 +1186,11 @@ export default function App() {
           const key = `family-alarm-${e.id}-${min}-${e.start}`;
           if (diff >= min && diff < min + 1 && !localStorage.getItem(key)) {
             localStorage.setItem(key, "1");
-            new Notification(`📅 ${e.title}`, {
-              body: `${min}분 후 일정이 시작됩니다.${e.location ? ` 장소: ${e.location}` : ""}`,
+            new Notification(e.kind === "approval-alert" ? e.title : `📅 ${e.title}`, {
+              body:
+                e.kind === "approval-alert"
+                  ? (e.memo ?? "숙제 완료 승인 또는 거절이 필요합니다.")
+                  : `${min}분 후 일정이 시작됩니다.${e.location ? ` 장소: ${e.location}` : ""}`,
             });
           }
         });
@@ -1161,6 +1206,7 @@ export default function App() {
       (e) =>
         e.start.slice(0, 10) === today &&
         e.kind !== "homework-complete" &&
+        e.kind !== "approval-alert" &&
         e.memberIds.some((m) => selected.includes(m)),
     )
     .sort((a, b) => a.start.localeCompare(b.start));
@@ -1516,9 +1562,8 @@ export default function App() {
               <button onClick={testNotification}>테스트 알림</button>
             </div>
             <p className="setting-note">
-              화면이 꺼진 상태의 확실한 푸시 알림은 FCM 같은 서버 푸시 연결이
-              추가로 필요합니다. 현재 버전은 브라우저가 실행 중일 때 일정 알림을
-              감지합니다.
+              알림 권한을 허용하면 FCM 백그라운드 푸시도 등록됩니다. 부모 확인 요청과 일정 알림을
+              앱이 닫혀 있을 때도 받을 수 있습니다.
             </p>
             <button
               className="save-btn wide"

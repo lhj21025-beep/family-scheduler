@@ -6,8 +6,11 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.messaging.FirebaseMessaging
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.LocalDateTime
+import java.security.MessageDigest
 
 class FamilyRepository {
     private val auth = FirebaseAuth.getInstance()
@@ -15,6 +18,7 @@ class FamilyRepository {
     private var monthListener: ListenerRegistration? = null
     private var homeworkListener: ListenerRegistration? = null
     private var noticeListener: ListenerRegistration? = null
+    private var approvalListener: ListenerRegistration? = null
 
     fun login(email: String, password: String, done: (Result<Unit>) -> Unit) {
         auth.signInWithEmailAndPassword(email, password)
@@ -38,7 +42,9 @@ class FamilyRepository {
             .whereGreaterThanOrEqualTo("date", start).whereLessThan("date", end)
             .addSnapshotListener { snapshots, e ->
                 if (e != null) return@addSnapshotListener error(e)
-                val events = snapshots?.documents.orEmpty().flatMap { parseEvents(it) }.sortedBy { it.start }
+                val events = snapshots?.documents.orEmpty().flatMap { parseEvents(it) }
+                    .filter { it.kind != "approval-alert" }
+                    .sortedBy { it.start }
                 update(events)
             }
     }
@@ -63,6 +69,33 @@ class FamilyRepository {
                 }.orEmpty()
                 update(items.sortedByDescending { it.createdAt })
             }
+    }
+
+    fun listenApprovals(update: (List<HomeworkApproval>) -> Unit) {
+        approvalListener?.remove()
+        approvalListener = db.collection("familyData").document("family-main")
+            .addSnapshotListener { snapshot, _ ->
+                val raw = snapshot?.get("approvalRequests") as? Map<*, *>
+                val items = raw?.values?.mapNotNull { value ->
+                    (value as? Map<*, *>)?.let { HomeworkApproval.fromMap(it) }
+                }.orEmpty()
+                update(items.sortedByDescending { it.requestedAt })
+            }
+    }
+
+    fun registerPushToken() {
+        FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+            val key = MessageDigest.getInstance("SHA-256")
+                .digest(token.toByteArray())
+                .joinToString("") { "%02x".format(it) }
+            val value = mapOf(
+                "token" to token,
+                "memberId" to signedMember(),
+                "updatedAt" to nowIso(),
+            )
+            db.collection("familyData").document("family-main")
+                .set(mapOf("pushTokens" to mapOf(key to value)), SetOptions.merge())
+        }
     }
 
     fun saveNotices(notices: List<FamilyNotice>, done: (Result<Unit>) -> Unit) {
@@ -175,6 +208,105 @@ class FamilyRepository {
             .addOnFailureListener { done(Result.failure(it)) }
     }
 
+    fun requestHomeworkApproval(event: FamilyEvent, done: (Result<Unit>) -> Unit) {
+        val familyRef = db.collection("familyData").document("family-main")
+        familyRef.get().addOnSuccessListener { snapshot ->
+            val approvals = snapshot.get("approvalRequests") as? Map<*, *>
+            val duplicatePending = approvals?.values?.any { value ->
+                val map = value as? Map<*, *> ?: return@any false
+                map["status"] == "pending" && map["eventId"] == event.id
+            } == true
+            if (duplicatePending) {
+                done(Result.failure(IllegalStateException("이미 부모 확인을 요청한 숙제입니다.")))
+                return@addOnSuccessListener
+            }
+
+            val request = HomeworkApproval(
+                eventId = event.id,
+                homeworkId = event.homeworkId,
+                homeworkSeriesId = event.homeworkSeriesId,
+                homeworkStartDate = event.homeworkStartDate,
+                homeworkEndDate = event.homeworkEndDate,
+                title = cleanHomeworkTitle(event.title),
+                targetDate = event.date,
+                requestedBy = signedMember(),
+            )
+            familyRef.set(
+                mapOf("approvalRequests" to mapOf(request.id to request.toMap())),
+                SetOptions.merge()
+            ).addOnSuccessListener {
+                val pushAt = LocalDateTime.now().plusMinutes(1)
+                val alert = FamilyEvent(
+                    id = "approval_alert_${request.id}",
+                    title = "✅ 부모 확인 필요 · ${request.title}",
+                    start = pushAt.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")),
+                    end = pushAt.plusMinutes(5).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")),
+                    memberIds = listOf("me", "wife"),
+                    kind = "approval-alert",
+                    memo = "강천이 ${request.targetDate} 숙제를 미리 완료하려고 합니다. 앱에서 승인 또는 거절해 주세요.",
+                    alarmMinutes = listOf(0),
+                )
+                saveEvent(alert) { saved ->
+                    if (saved.isSuccess) done(Result.success(Unit))
+                    else done(Result.failure(saved.exceptionOrNull() ?: Exception("알림 저장 실패")))
+                }
+            }.addOnFailureListener { done(Result.failure(it)) }
+        }.addOnFailureListener { done(Result.failure(it)) }
+    }
+
+    fun decideHomeworkApproval(request: HomeworkApproval, approve: Boolean, done: (Result<Int>) -> Unit) {
+        val familyRef = db.collection("familyData").document("family-main")
+        val start = LocalDate.parse(request.homeworkStartDate ?: request.targetDate)
+        val end = LocalDate.parse(request.homeworkEndDate ?: request.targetDate)
+        val refs = datesBetween(start, end).map { db.collection("scheduleDays").document(it.toString()) }
+        db.runTransaction { transaction ->
+            val familySnap = transaction.get(familyRef)
+            val approvals = familySnap.get("approvalRequests") as? Map<*, *>
+            val raw = approvals?.get(request.id) as? Map<*, *>
+                ?: error("부모 확인 요청을 찾지 못했습니다.")
+            val current = HomeworkApproval.fromMap(raw) ?: error("부모 확인 요청을 읽지 못했습니다.")
+            if (current.status != "pending") error("이미 다른 보호자가 처리한 요청입니다.")
+
+            val snapshots = refs.map { transaction.get(it) }
+            var changed = 0
+            if (approve) {
+                snapshots.forEachIndexed { index, snap ->
+                    parseEvents(snap).filter { candidate ->
+                        candidate.kind == "homework" &&
+                            candidate.homeworkId == current.homeworkId &&
+                            if (!current.homeworkSeriesId.isNullOrBlank()) {
+                                candidate.homeworkSeriesId == current.homeworkSeriesId &&
+                                    candidate.homeworkStartDate == (current.homeworkStartDate ?: current.targetDate) &&
+                                    candidate.homeworkEndDate == (current.homeworkEndDate ?: current.targetDate)
+                            } else candidate.id == current.eventId
+                    }.forEach { candidate ->
+                        if (!candidate.completed) {
+                            val next = candidate.copy(
+                                title = "✅ ${cleanHomeworkTitle(candidate.title)}",
+                                completed = true,
+                                completedAt = nowIso(),
+                                completedBy = signedMember(),
+                                createdBy = candidate.createdBy ?: auth.currentUser?.uid,
+                            )
+                            transaction.update(refs[index], "events.${safeKey(candidate.id)}", next.toMap())
+                            changed++
+                        }
+                    }
+                }
+                if (changed == 0) error("승인할 숙제 데이터를 찾지 못했습니다.")
+            }
+
+            val decided = current.copy(
+                status = if (approve) "approved" else "rejected",
+                decidedAt = nowIso(),
+                decidedBy = signedMember(),
+            )
+            transaction.update(familyRef, "approvalRequests.${request.id}", decided.toMap())
+            changed
+        }.addOnSuccessListener { refreshWidgets(); done(Result.success(it)) }
+            .addOnFailureListener { done(Result.failure(it)) }
+    }
+
     fun deleteHomeworkEvents(event: FamilyEvent, mode: String, done: (Result<Int>) -> Unit) {
         db.collection("scheduleDays").get()
             .addOnSuccessListener { snapshots ->
@@ -233,7 +365,9 @@ class FamilyRepository {
                 }.forEach { candidate ->
                     val next = candidate.copy(
                         title = (if (completed) "✅ " else "📝 ") + cleanHomeworkTitle(candidate.title),
-                        completed = completed, completedAt = if (completed) nowIso() else null,
+                        completed = completed,
+                        completedAt = if (completed) nowIso() else null,
+                        completedBy = if (completed) signedMember() else null,
                         createdBy = candidate.createdBy ?: auth.currentUser?.uid
                     )
                     transaction.update(ref, "events.${safeKey(candidate.id)}", next.toMap())
@@ -249,7 +383,7 @@ class FamilyRepository {
     fun loadToday(done: (List<FamilyEvent>) -> Unit) {
         val today = LocalDate.now().toString()
         db.collection("scheduleDays").document(today).get()
-            .addOnSuccessListener { done(parseEvents(it).sortedBy(FamilyEvent::start)) }
+            .addOnSuccessListener { done(parseEvents(it).filter { e -> e.kind != "approval-alert" }.sortedBy(FamilyEvent::start)) }
             .addOnFailureListener { done(emptyList()) }
     }
 
@@ -258,7 +392,9 @@ class FamilyRepository {
         if (needle.isBlank()) return done(Result.success(emptyList()))
         db.collection("scheduleDays").get()
             .addOnSuccessListener { snapshots ->
-                val rows = snapshots.documents.flatMap { parseEvents(it) }.filter { event ->
+                val rows = snapshots.documents.flatMap { parseEvents(it) }
+                    .filter { it.kind != "approval-alert" }
+                    .filter { event ->
                     val family = event.memberIds.mapNotNull { id -> members.firstOrNull { it.id == id }?.label }.joinToString(" ")
                     "${event.date} ${event.title} ${event.location.orEmpty()} ${event.memo.orEmpty()} $family".lowercase().contains(needle)
                 }.sortedBy { it.start }
@@ -267,7 +403,7 @@ class FamilyRepository {
             .addOnFailureListener { done(Result.failure(it)) }
     }
 
-    fun close() { monthListener?.remove(); homeworkListener?.remove(); noticeListener?.remove() }
+    fun close() { monthListener?.remove(); homeworkListener?.remove(); noticeListener?.remove(); approvalListener?.remove() }
 
     private fun parseEvents(snapshot: DocumentSnapshot): List<FamilyEvent> {
         val events = snapshot.get("events") as? Map<*, *> ?: return emptyList()

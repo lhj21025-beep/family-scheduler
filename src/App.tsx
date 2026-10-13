@@ -825,6 +825,12 @@ export default function App() {
             decidedBy: currentMember,
           }),
         );
+        const alertDate = dateKey(new Date(new Date(current.requestedAt).getTime() + 60000));
+        transaction.update(
+          doc(db, "scheduleDays", dayId(alertDate)),
+          new FieldPath("events", eventFieldKey(`approval_alert_${request.id}`)),
+          deleteField(),
+        );
       });
       setApprovalOpen(false);
       flash(approve ? "숙제 완료를 승인했습니다." : "숙제 완료 요청을 거절했습니다.");

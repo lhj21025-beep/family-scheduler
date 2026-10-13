@@ -39,20 +39,7 @@ class FamilyRepository {
             .addSnapshotListener { snapshots, e ->
                 if (e != null) return@addSnapshotListener error(e)
                 val events = snapshots?.documents.orEmpty().flatMap { parseEvents(it) }.sortedBy { it.start }
-                val duplicates = mutableListOf<FamilyEvent>()
-                events.filter { it.kind == "homework" && it.homeworkId == "eli-english" }
-                    .groupBy { it.date }
-                    .forEach { (date, rows) ->
-                        val day = runCatching { LocalDate.parse(date) }.getOrNull()
-                        if (day?.dayOfWeek?.value != 1 || rows.size <= 1) return@forEach
-                        val keep = rows.sortedWith(compareByDescending<FamilyEvent> { it.completed }.thenBy { it.id }).first()
-                        duplicates += rows.filter { it.id != keep.id }
-                    }
-                duplicates.forEach { duplicate ->
-                    db.collection("scheduleDays").document(duplicate.date)
-                        .update("events.${safeKey(duplicate.id)}", FieldValue.delete())
-                }
-                update(events.filterNot { item -> duplicates.any { it.id == item.id } })
+                update(events)
             }
     }
 
@@ -125,6 +112,36 @@ class FamilyRepository {
         db.collection("scheduleDays").document(event.date)
             .update("events.${safeKey(event.id)}", FieldValue.delete())
             .addOnSuccessListener { refreshWidgets(); done(Result.success(Unit)) }
+            .addOnFailureListener { done(Result.failure(it)) }
+    }
+
+    fun checkHomeworkDuplicates(
+        selected: List<Homework>, start: LocalDate, end: LocalDate,
+        repeat: String, repeatCount: Int, done: (Result<List<Pair<String, String>>>) -> Unit
+    ) {
+        val blockLength = java.time.temporal.ChronoUnit.DAYS.between(start, end)
+        val proposed = selected.flatMap { homework ->
+            repeatStarts(start, repeat, if (repeat == "none") 1 else repeatCount).flatMap { occurrenceStart ->
+                val occurrenceEnd = occurrenceStart.plusDays(blockLength)
+                datesBetween(occurrenceStart, occurrenceEnd).map { day ->
+                    Triple(day.toString(), homework.id, homework.name)
+                }
+            }
+        }
+        if (proposed.isEmpty()) return done(Result.success(emptyList()))
+        val dates = proposed.map { it.first }.distinct()
+        val refs = dates.map { db.collection("scheduleDays").document(it) }
+        com.google.android.gms.tasks.Tasks.whenAllSuccess<DocumentSnapshot>(refs.map { it.get() })
+            .addOnSuccessListener { snapshots ->
+                val byDate = snapshots.associate { snap -> snap.id to parseEvents(snap).filter { it.kind == "homework" } }
+                val duplicates = proposed.filter { (date, homeworkId, name) ->
+                    byDate[date].orEmpty().any { old ->
+                        old.homeworkId == homeworkId &&
+                            (homeworkId != "school-other" || cleanHomeworkTitle(old.title) == name)
+                    }
+                }.map { it.first to it.third }.distinct()
+                done(Result.success(duplicates))
+            }
             .addOnFailureListener { done(Result.failure(it)) }
     }
 

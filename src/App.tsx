@@ -43,6 +43,8 @@ type EventItem = {
   completed?: boolean;
   completedAt?: string;
   completedBy?: MemberId;
+  approvedAt?: string;
+  approvedBy?: MemberId;
   location?: string;
   memo?: string;
   repeat?: Repeat;
@@ -805,8 +807,10 @@ export default function App() {
                   ...item,
                   title: `✅ ${cleanHomeworkTitle(item.title)}`,
                   completed: true,
-                  completedAt: now.toISOString(),
-                  completedBy: currentMember,
+                  completedAt: current.requestedAt,
+                  completedBy: current.requestedBy,
+                  approvedAt: now.toISOString(),
+                  approvedBy: currentMember,
                 }),
               );
               changed++;
@@ -1005,6 +1009,8 @@ export default function App() {
               completed: false,
               completedAt: undefined,
               completedBy: undefined,
+              approvedAt: undefined,
+              approvedBy: undefined,
             });
             batch.update(
               ref,
@@ -1876,7 +1882,12 @@ export default function App() {
                   </span>
                   {modal.completed && modal.completedAt && (
                     <div className="field-hint">
-                      완료: {new Date(modal.completedAt).toLocaleString("ko-KR")} · {memberLabel(modal.completedBy)}
+                      완료 버튼: {new Date(modal.completedAt).toLocaleString("ko-KR")} · {memberLabel(modal.completedBy)}
+                    </div>
+                  )}
+                  {modal.completed && modal.approvedAt && (
+                    <div className="field-hint">
+                      부모 승인: {new Date(modal.approvedAt).toLocaleString("ko-KR")} · {memberLabel(modal.approvedBy)}
                     </div>
                   )}
                   <p>

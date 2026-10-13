@@ -24,18 +24,8 @@ type EventItem = {
 }
 type PushToken = { token: string; memberId: MemberId; updatedAt?: string }
 
-type HomeworkApproval = {
-  id: string
-  title: string
-  targetDate: string
-  requestedAt: string
-  requestedBy: MemberId
-  status: 'pending' | 'approved' | 'rejected'
-  notificationSentAt?: string
-}
 type FamilyData = {
   pushTokens?: Record<string, PushToken>
-  approvalRequests?: Record<string, HomeworkApproval>
 }
 
 function kstMinute(date: Date) {
@@ -93,53 +83,6 @@ export const sendScheduleReminders = onSchedule(
     const pushTokens = Object.values(family.pushTokens ?? {}).filter(x => x?.token && x?.memberId)
 
     if (!pushTokens.length) return
-
-    const approvalMessages: Array<{ token: string; title: string; body: string; requestId: string }> = []
-    const approvals = Object.values(family.approvalRequests ?? {})
-      .filter(r => r?.status === 'pending' && !r.notificationSentAt)
-    for (const request of approvals) {
-      const requester = request.requestedBy === 'son' ? '강천' : request.requestedBy
-      for (const recipient of pushTokens.filter(t => t.memberId === 'me' || t.memberId === 'wife')) {
-        approvalMessages.push({
-          token: recipient.token,
-          title: '✅ 숙제 부모 확인 요청',
-          body: `${requester}이(가) ${request.targetDate} ${request.title} 숙제를 미리 완료하려고 합니다. 승인 또는 거절해 주세요.`,
-          requestId: request.id,
-        })
-      }
-    }
-
-    if (approvalMessages.length) {
-      const approvalResponse = await getMessaging().sendEach(
-        approvalMessages.map(m => ({
-          token: m.token,
-          notification: { title: m.title, body: m.body },
-          data: { type: 'homework-approval', requestId: m.requestId },
-          webpush: {
-            fcmOptions: { link: 'https://lhj21025-beep.github.io/family-scheduler/' },
-            notification: { icon: 'https://lhj21025-beep.github.io/family-scheduler/favicon.svg' },
-          },
-          android: { priority: 'high' as const },
-        })),
-      )
-      const sentRequests = new Set<string>()
-      approvalMessages.forEach((m, index) => {
-        if (approvalResponse.responses[index]?.success) sentRequests.add(m.requestId)
-      })
-      if (sentRequests.size) {
-        const approvalUpdates: Record<string, string> = {}
-        sentRequests.forEach(id => {
-          approvalUpdates[`approvalRequests.${id}.notificationSentAt`] = now.toISOString()
-        })
-        await familySnap.ref.update(approvalUpdates)
-      }
-      logger.info('Homework approval notifications processed', {
-        requests: approvals.length,
-        messages: approvalMessages.length,
-        success: approvalResponse.successCount,
-        failure: approvalResponse.failureCount,
-      })
-    }
 
     const messages: Array<{ token: string; title: string; body: string; key: string }> = []
     for (const event of events) {

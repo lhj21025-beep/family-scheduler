@@ -283,8 +283,10 @@ class FamilyRepository {
                             val next = candidate.copy(
                                 title = "✅ ${cleanHomeworkTitle(candidate.title)}",
                                 completed = true,
-                                completedAt = nowIso(),
-                                completedBy = signedMember(),
+                                completedAt = current.requestedAt,
+                                completedBy = current.requestedBy,
+                                approvedAt = nowIso(),
+                                approvedBy = signedMember(),
                                 createdBy = candidate.createdBy ?: auth.currentUser?.uid,
                             )
                             transaction.update(refs[index], "events.${safeKey(candidate.id)}", next.toMap())
@@ -375,6 +377,8 @@ class FamilyRepository {
                         completed = completed,
                         completedAt = if (completed) nowIso() else null,
                         completedBy = if (completed) signedMember() else null,
+                        approvedAt = null,
+                        approvedBy = null,
                         createdBy = candidate.createdBy ?: auth.currentUser?.uid
                     )
                     transaction.update(ref, "events.${safeKey(candidate.id)}", next.toMap())

@@ -23,9 +23,33 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Build debug APK
+
+      - name: Prepare fixed signing key
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/family-scheduler-release.keystore
+
+      - name: Build fixed-signed release APK
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle --project-dir android :app:assembleRelease --stacktrace
+
+      - name: Build temporary debug APK
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 == '' }}
         run: gradle --project-dir android :app:assembleDebug --stacktrace
+
       - uses: actions/upload-artifact@v4
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        with:
+          name: FamilyScheduler-Native-fixed-signing
+          path: android/app/build/outputs/apk/release/app-release.apk
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 == '' }}
         with:
           name: FamilyScheduler-Native-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk

@@ -16,9 +16,22 @@ android {
         versionName = "1.5.1"
     }
 
+    signingConfigs {
+        create("release") {
+            val ks = file("family-scheduler-release.keystore")
+            if (ks.exists()) {
+                storeFile = ks
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

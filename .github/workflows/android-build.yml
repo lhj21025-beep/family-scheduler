@@ -14,6 +14,11 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -24,32 +29,26 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      - name: Validate signing secrets
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+
       - name: Prepare fixed signing key
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/family-scheduler-release.keystore
 
       - name: Build fixed-signed release APK
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
-        env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: gradle --project-dir android :app:assembleRelease --stacktrace
 
-      - name: Build temporary debug APK
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 == '' }}
-        run: gradle --project-dir android :app:assembleDebug --stacktrace
+      - name: Verify APK signature
+        run: |
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
 
       - uses: actions/upload-artifact@v4
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         with:
           name: FamilyScheduler-Native-fixed-signing
           path: android/app/build/outputs/apk/release/app-release.apk
-
-      - uses: actions/upload-artifact@v4
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 == '' }}
-        with:
-          name: FamilyScheduler-Native-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk

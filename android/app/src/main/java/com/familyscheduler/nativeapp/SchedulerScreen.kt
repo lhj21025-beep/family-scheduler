@@ -298,7 +298,8 @@ private fun CalendarToolbar(
     BoxWithConstraints(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
-        val compact = maxWidth < 600.dp
+        val availableWidth = maxWidth
+        val compact = availableWidth < 600.dp
 
         if (compact) {
             Column(Modifier.fillMaxWidth()) {
@@ -327,7 +328,7 @@ private fun CalendarToolbar(
                         Modifier.weight(1f).padding(horizontal = 6.dp),
                         textAlign = TextAlign.Center,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = if (maxWidth < 380.dp) 13.sp else 15.sp,
+                        fontSize = if (availableWidth < 380.dp) 13.sp else 15.sp,
                         maxLines = 1,
                         softWrap = false,
                         overflow = TextOverflow.Ellipsis,

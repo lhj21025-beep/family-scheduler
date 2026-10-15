@@ -21,3 +21,9 @@
 네이티브 전용 추가 기능: 백그라운드 정확 알림, 오늘 일정 홈 화면 위젯.
 
 GitHub Actions의 `Build Android APK` 작업이 디버그 APK를 자동 생성합니다.
+
+
+## Android signing
+
+GitHub Actions uses permanent release signing when the repository signing secrets are configured.
+This keeps future APK updates installable over the existing app without uninstalling it.

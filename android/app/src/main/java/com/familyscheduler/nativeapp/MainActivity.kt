@@ -2,6 +2,7 @@ package com.familyscheduler.nativeapp
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.app.Dialog
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -28,6 +29,11 @@ import androidx.core.app.ActivityCompat
 import com.google.android.material.button.MaterialButton
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.LocalDateTime
+import java.time.Duration
+import java.time.Instant
+import java.time.OffsetDateTime
+import java.time.ZoneId
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 
@@ -116,6 +122,8 @@ class MainActivity : ComponentActivity() {
                 onMonthChanged = { next -> month = next; listenMonth() },
                 onEventClick = { showEventDetails(it) },
                 onAddEvent = { date -> selectedDate = date; showEventEditor(null) },
+                onMoveEvent = { event, nextStart -> moveEventFromCalendar(event, nextStart) },
+                onResizeEvent = { event, durationMinutes -> resizeEventFromCalendar(event, durationMinutes) },
                 onToday = { showTodaySummary() },
                 onNotice = { showNoticeInfo() },
                 onStats = { showStats() },
@@ -131,6 +139,12 @@ class MainActivity : ComponentActivity() {
         repo.listenApprovals { rows -> runOnUiThread { approvals = rows } }
         requestNotificationPermission()
         repo.registerPushToken()
+        repo.cleanupEliTeacherPhone { result ->
+            runOnUiThread {
+                val removed = result.getOrDefault(0)
+                if (removed > 0) toast("엘리하이 담임선생님 전화 일정 ${removed}개를 삭제했습니다.")
+            }
+        }
         listenMonth()
     }
 
@@ -210,6 +224,36 @@ class MainActivity : ComponentActivity() {
         } }, { runOnUiThread { composeLoading = false; toast("일정을 불러오지 못했습니다.") } })
     }
 
+    private fun moveEventFromCalendar(event: FamilyEvent, nextStart: LocalDateTime) {
+        if (event.kind != "event") return
+        val oldStart = runCatching { LocalDateTime.parse(event.start) }.getOrNull() ?: return
+        val oldEnd = event.end?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
+        val duration = oldEnd?.let { Duration.between(oldStart, it).toMinutes().coerceAtLeast(1) } ?: 60L
+        val next = event.copy(
+            start = nextStart.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")),
+            end = nextStart.plusMinutes(duration).format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")),
+        )
+        repo.moveOrSaveEvent(event, next) { result ->
+            runOnUiThread {
+                toast(if (result.isSuccess) "일정을 이동했습니다." else "일정 이동에 실패했습니다.")
+            }
+        }
+    }
+
+    private fun resizeEventFromCalendar(event: FamilyEvent, durationMinutes: Long) {
+        if (event.kind != "event") return
+        val start = runCatching { LocalDateTime.parse(event.start) }.getOrNull() ?: return
+        val next = event.copy(
+            end = start.plusMinutes(durationMinutes.coerceAtLeast(30))
+                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
+        )
+        repo.moveOrSaveEvent(event, next) { result ->
+            runOnUiThread {
+                toast(if (result.isSuccess) "일정 시간을 변경했습니다." else "일정 시간 변경에 실패했습니다.")
+            }
+        }
+    }
+
     private fun renderMonth() {
         if(viewMode=="week")return renderWeekGrid()
         if(viewMode=="day")return renderDayGrid()
@@ -253,7 +297,7 @@ class MainActivity : ComponentActivity() {
 
     private fun renderDayGrid(){monthTitle.text=selectedDate.format(DateTimeFormatter.ofPattern("yyyy년 M월 d일"));calendar.removeAllViews();calendar.columnCount=1;filteredEvents().filter{it.date==selectedDate.toString()}.forEach{e->calendar.addView(TextView(this).apply{text="${if(e.allDay)"종일" else e.start.drop(11).take(5)}   ${e.title}";textSize=14f;setTextColor(Color.WHITE);setPadding(dp(10));background=rounded(eventColor(e),6f);setOnClickListener{showEventDetails(e)}},GridLayout.LayoutParams().apply{width=ViewGroup.LayoutParams.MATCH_PARENT;height=dp(48);setMargins(dp(6),dp(3),dp(6),dp(3))})};renderAgenda()}
 
-    private fun eventColor(e:FamilyEvent)=when{e.completed->0xFF9AA0A6.toInt();e.kind=="homework"&&e.title.contains("엘리하이")->0xFF06B6D4.toInt();e.kind=="homework"->0xFFEC4899.toInt();else->members.firstOrNull{e.memberIds.contains(it.id)}?.color?:0xFF4285F4.toInt()}
+    private fun eventColor(e:FamilyEvent)=when{e.completed->0xFF9AA0A6.toInt();e.kind=="homework"&&e.title.contains("엘리하이")->0xFF06B6D4.toInt();e.kind=="homework"&&e.title.contains("학교숙제")->0xFFF59E0B.toInt();e.kind=="homework"->0xFFEC4899.toInt();else->members.firstOrNull{e.memberIds.contains(it.id)}?.color?:0xFF4285F4.toInt()}
 
     private fun filteredEvents() = allEvents.filter { event -> event.memberIds.any(visibleMembers::contains) && (searchQuery.isBlank() || "${event.title} ${event.location.orEmpty()} ${event.memo.orEmpty()}".contains(searchQuery,true)) }
 

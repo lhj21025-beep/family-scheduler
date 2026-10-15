@@ -478,7 +478,6 @@ private fun TimeCalendar(
                 Box(
                     Modifier.weight(1f).height(hourHeight * 24)
                         .border(0.5.dp, GoogleBorder)
-                        .clickable { onEmpty(day) }
                 ) {
                     Column(Modifier.fillMaxSize()) {
                         repeat(24) {

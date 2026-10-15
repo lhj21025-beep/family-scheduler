@@ -733,13 +733,153 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showHomeworkDialog() {
-        val names = homeworks.map { it.name }.toTypedArray()
-        val checked = BooleanArray(names.size)
-        val chosen = mutableSetOf<Int>()
-        AlertDialog.Builder(this).setTitle("등록할 숙제 선택").setMultiChoiceItems(names, checked) { _, which, isChecked -> if (isChecked) chosen += which else chosen -= which }
-            .setPositiveButton("다음") { _, _ -> if (chosen.isNotEmpty()) showHomeworkOptions(chosen.map { homeworks[it] }) else toast("숙제를 선택해 주세요.") }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20)) }
+        val start = edit("시작일", selectedDate.toString(), false).apply { setOnClickListener { pickDate(this) } }
+        val end = edit("종료일", selectedDate.toString(), false).apply { setOnClickListener { pickDate(this) } }
+        val dateRow = LinearLayout(this)
+        dateRow.addView(start, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(0,0,dp(4),0) })
+        dateRow.addView(end, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(4),0,0,0) })
+        box.addView(label("시작일 / 종료일")); box.addView(dateRow)
+
+        val repeatCodes = listOf("none", "daily", "weekdays", "weekly", "monthly")
+        val repeat = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                listOf("반복 안 함", "매일", "평일", "매주", "매월"))
+            setSelection(1)
+        }
+        val countPresetValues = listOf(2, 3, 5, 10, 20, 30, 60)
+        val countPreset = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                countPresetValues.map { "${it}회" } + "직접 입력")
+        }
+        val count = edit("횟수 직접 입력", "2").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        box.addView(label("반복")); box.addView(repeat)
+        box.addView(label("반복 횟수")); box.addView(countPreset); box.addView(count)
+
+        val hint = TextView(this).apply {
+            text = "선택한 기간을 한 묶음으로 반복 등록합니다. 같은 묶음 안에서는 어느 날짜에서 완료해도 전체가 함께 완료됩니다."
+            textSize = 12f; setTextColor(0xFF64748B.toInt()); setPadding(0, dp(8), 0, dp(10))
+        }
+        box.addView(hint)
+
+        box.addView(TextView(this).apply {
+            text = "숙제 선택"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD; setPadding(0,dp(6),0,dp(6))
+        })
+
+        val selected = mutableSetOf<Homework>()
+        val homeworkGrid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val schoolDetailLabel = label("어떤 학교숙제인가요?")
+        val schoolDetail = edit("예: 과학 준비물 조사, 수학 익힘책 20쪽", "")
+        schoolDetailLabel.visibility = View.GONE
+        schoolDetail.visibility = View.GONE
+
+        fun updateSchoolDetail() {
+            val show = selected.any { it.id == "school-other" || it.name.replace(" ", "").contains("학교숙제(기타)") }
+            schoolDetailLabel.visibility = if (show) View.VISIBLE else View.GONE
+            schoolDetail.visibility = if (show) View.VISIBLE else View.GONE
+        }
+
+        homeworks.forEach { homework ->
+            homeworkGrid.addView(CheckBox(this).apply {
+                text = homework.name
+                textSize = 15f
+                setPadding(dp(10), dp(5), dp(10), dp(5))
+                background = rounded(0xFFF8FAFC.toInt(), 9f, 0xFFE2E8F0.toInt())
+                setOnCheckedChangeListener { _, checked ->
+                    if (checked) selected += homework else selected -= homework
+                    updateSchoolDetail()
+                }
+            }, matchWrap(bottom = 5))
+        }
+        box.addView(homeworkGrid)
+        box.addView(schoolDetailLabel)
+        box.addView(schoolDetail)
+
+        countPreset.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (position < countPresetValues.size) count.setText(countPresetValues[position].toString())
+            }
+        }
+        repeat.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val enabled = position != 0
+                countPreset.isEnabled = enabled
+                count.isEnabled = enabled
+                if (!enabled) count.setText("1") else if ((count.text.toString().toIntOrNull() ?: 1) < 2) count.setText("2")
+            }
+        }
+
+        val alert = AlertDialog.Builder(this)
+            .setTitle("📝 숙제 체크")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("선택한 숙제 등록", null)
             .setNeutralButton("숙제 항목 관리") { _, _ -> showHomeworkManageDialog() }
-            .setNegativeButton("취소", null).show()
+            .setNegativeButton("취소", null)
+            .create()
+
+        alert.setOnShowListener {
+            alert.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (selected.isEmpty()) return@setOnClickListener toast("숙제를 선택해 주세요.")
+                val startDate = runCatching { LocalDate.parse(start.text.toString()) }.getOrNull()
+                    ?: return@setOnClickListener toast("시작일을 확인해 주세요.")
+                val endDate = runCatching { LocalDate.parse(end.text.toString()) }.getOrNull()
+                    ?: return@setOnClickListener toast("종료일을 확인해 주세요.")
+                if (endDate.isBefore(startDate)) return@setOnClickListener toast("종료일은 시작일 이후여야 합니다.")
+                val schoolSelected = selected.any { it.id == "school-other" || it.name.replace(" ", "").contains("학교숙제(기타)") }
+                if (schoolSelected && schoolDetail.text.isBlank()) return@setOnClickListener toast("어떤 학교숙제인지 입력해 주세요.")
+
+                val resolvedSelected = selected.map { homework ->
+                    if (homework.id == "school-other" || homework.name.replace(" ", "").contains("학교숙제(기타)"))
+                        homework.copy(name = "학교숙제 · ${schoolDetail.text.toString().trim()}")
+                    else homework
+                }
+                val repeatCode = repeatCodes[repeat.selectedItemPosition]
+                val total = count.text.toString().toIntOrNull()?.coerceIn(1, 365) ?: 1
+
+                alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                repo.checkHomeworkDuplicates(resolvedSelected, startDate, endDate, repeatCode, total) { duplicateResult ->
+                    runOnUiThread {
+                        if (duplicateResult.isFailure) {
+                            alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                            toast("중복 숙제 확인에 실패했습니다.")
+                            return@runOnUiThread
+                        }
+                        val duplicates = duplicateResult.getOrDefault(emptyList())
+                        val registerNow = {
+                            repo.registerHomework(resolvedSelected, startDate, endDate, repeatCode, total) { result ->
+                                runOnUiThread {
+                                    if (result.isSuccess) {
+                                        alert.dismiss()
+                                        toast("${result.getOrDefault(0)}개 숙제를 등록했습니다.")
+                                    } else {
+                                        alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                                        toast("숙제 등록에 실패했습니다.")
+                                    }
+                                }
+                            }
+                        }
+                        if (duplicates.isEmpty()) {
+                            registerNow()
+                        } else {
+                            alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                            val preview = duplicates.take(6).joinToString("\n") { "${it.first} · ${it.second}" }
+                            AlertDialog.Builder(this@MainActivity)
+                                .setTitle("중복 숙제 확인")
+                                .setMessage("동일한 숙제가 이미 등록되어 있습니다.\n\n$preview${if (duplicates.size > 6) "\n외 ${duplicates.size - 6}개" else ""}\n\n그래도 중복으로 등록할까요?")
+                                .setPositiveButton("그래도 등록") { _, _ ->
+                                    alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                                    registerNow()
+                                }
+                                .setNegativeButton("취소", null)
+                                .show()
+                        }
+                    }
+                }
+            }
+        }
+        alert.show()
     }
 
     private fun showHomeworkManageDialog() {

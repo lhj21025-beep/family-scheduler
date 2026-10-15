@@ -10,6 +10,9 @@ import com.google.firebase.messaging.FirebaseMessaging
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.Duration
+import java.time.temporal.ChronoUnit
 import java.security.MessageDigest
 
 class FamilyRepository {
@@ -135,10 +138,28 @@ class FamilyRepository {
     }
 
     fun moveOrSaveEvent(old: FamilyEvent?, next: FamilyEvent, done: (Result<Unit>) -> Unit) {
-        if (old == null || old.date == next.date) return saveEvent(next, done)
-        deleteEvent(old) { deleted ->
-            if (deleted.isFailure) done(deleted) else saveEvent(next, done)
+        if (old == null) return saveEvent(next, done)
+        val value = next.copy(createdBy = next.createdBy ?: old.createdBy ?: auth.currentUser?.uid)
+        val oldRef = db.collection("scheduleDays").document(old.date)
+        val nextRef = db.collection("scheduleDays").document(value.date)
+
+        if (old.date == value.date && old.id == value.id) {
+            oldRef.update("events.${safeKey(old.id)}", value.toMap())
+                .addOnSuccessListener { refreshWidgets(); done(Result.success(Unit)) }
+                .addOnFailureListener { done(Result.failure(it)) }
+            return
         }
+
+        val batch = db.batch()
+        batch.update(oldRef, "events.${safeKey(old.id)}", FieldValue.delete())
+        batch.set(
+            nextRef,
+            mapOf("date" to value.date, "events" to mapOf(safeKey(value.id) to value.toMap())),
+            SetOptions.merge()
+        )
+        batch.commit()
+            .addOnSuccessListener { refreshWidgets(); done(Result.success(Unit)) }
+            .addOnFailureListener { done(Result.failure(it)) }
     }
 
     fun deleteEvent(event: FamilyEvent, done: (Result<Unit>) -> Unit) {
@@ -146,6 +167,158 @@ class FamilyRepository {
             .update("events.${safeKey(event.id)}", FieldValue.delete())
             .addOnSuccessListener { refreshWidgets(); done(Result.success(Unit)) }
             .addOnFailureListener { done(Result.failure(it)) }
+    }
+
+    private fun sameEventSeries(candidate: FamilyEvent, target: FamilyEvent): Boolean {
+        if (candidate.kind != "event" || target.kind != "event") return false
+        if (!target.eventSeriesId.isNullOrBlank()) return candidate.eventSeriesId == target.eventSeriesId
+        if (!candidate.eventSeriesId.isNullOrBlank()) return false
+
+        val targetTime = target.start.drop(11).take(5)
+        val candidateTime = candidate.start.drop(11).take(5)
+        return candidate.title.trim() == target.title.trim() &&
+            candidateTime == targetTime &&
+            candidate.allDay == target.allDay &&
+            candidate.memberIds.toSet() == target.memberIds.toSet() &&
+            candidate.location.orEmpty().trim() == target.location.orEmpty().trim() &&
+            candidate.memo.orEmpty().trim() == target.memo.orEmpty().trim()
+    }
+
+    fun eventSeriesCount(event: FamilyEvent, done: (Result<Int>) -> Unit) {
+        if (event.kind != "event") return done(Result.success(1))
+        db.collection("scheduleDays").get()
+            .addOnSuccessListener { snapshots ->
+                val count = snapshots.documents.flatMap { parseEvents(it) }.count { sameEventSeries(it, event) }
+                done(Result.success(count.coerceAtLeast(1)))
+            }
+            .addOnFailureListener { done(Result.failure(it)) }
+    }
+
+    fun deleteEventSeries(event: FamilyEvent, mode: String, done: (Result<Int>) -> Unit) {
+        if (mode == "one") {
+            deleteEvent(event) { result ->
+                if (result.isSuccess) done(Result.success(1))
+                else done(Result.failure(result.exceptionOrNull() ?: IllegalStateException("삭제 실패")))
+            }
+            return
+        }
+        db.collection("scheduleDays").get()
+            .addOnSuccessListener { snapshots ->
+                val batch = db.batch()
+                var count = 0
+                snapshots.documents.forEach { snapshot ->
+                    parseEvents(snapshot).forEach { candidate ->
+                        val matches = sameEventSeries(candidate, event) &&
+                            (mode != "future" || candidate.date >= event.date)
+                        if (matches) {
+                            batch.update(snapshot.reference, "events.${safeKey(candidate.id)}", FieldValue.delete())
+                            count++
+                        }
+                    }
+                }
+                if (count == 0) return@addOnSuccessListener done(Result.failure(IllegalStateException("삭제할 반복 일정을 찾지 못했습니다.")))
+                batch.commit()
+                    .addOnSuccessListener { refreshWidgets(); done(Result.success(count)) }
+                    .addOnFailureListener { done(Result.failure(it)) }
+            }
+            .addOnFailureListener { done(Result.failure(it)) }
+    }
+
+    fun updateEventSeries(
+        original: FamilyEvent,
+        edited: FamilyEvent,
+        mode: String,
+        done: (Result<Int>) -> Unit
+    ) {
+        if (mode == "one") {
+            moveOrSaveEvent(original, edited) { result ->
+                if (result.isSuccess) done(Result.success(1))
+                else done(Result.failure(result.exceptionOrNull() ?: IllegalStateException("수정 실패")))
+            }
+            return
+        }
+
+        db.collection("scheduleDays").get()
+            .addOnSuccessListener { snapshots ->
+                val candidates = snapshots.documents.flatMap { snap ->
+                    parseEvents(snap).filter { candidate ->
+                        sameEventSeries(candidate, original) &&
+                            (mode != "future" || candidate.date >= original.date)
+                    }.map { snap to it }
+                }
+                if (candidates.isEmpty()) return@addOnSuccessListener done(Result.failure(IllegalStateException("수정할 반복 일정을 찾지 못했습니다.")))
+
+                val oldStart = runCatching { LocalDateTime.parse(original.start) }.getOrNull()
+                val newStart = runCatching { LocalDateTime.parse(edited.start) }.getOrNull()
+                val oldEnd = original.end?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
+                val newEnd = edited.end?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
+                val dayShift = if (oldStart != null && newStart != null) ChronoUnit.DAYS.between(oldStart.toLocalDate(), newStart.toLocalDate()) else 0L
+                val targetStartTime = newStart?.toLocalTime()
+                val targetDuration = if (newStart != null && newEnd != null) Duration.between(newStart, newEnd).toMinutes().coerceAtLeast(1) else null
+
+                val batch = db.batch()
+                var count = 0
+                candidates.forEach { (snapshot, candidate) ->
+                    val candidateStart = runCatching { LocalDateTime.parse(candidate.start) }.getOrNull()
+                    val candidateDate = candidateStart?.toLocalDate() ?: runCatching { LocalDate.parse(candidate.date) }.getOrNull()
+                    val shiftedDate = candidateDate?.plusDays(dayShift) ?: candidateDate
+                    val shiftedStart = if (shiftedDate != null && targetStartTime != null) shiftedDate.atTime(targetStartTime) else candidateStart
+                    val shiftedEnd = if (shiftedStart != null && targetDuration != null) shiftedStart.plusMinutes(targetDuration) else candidate.end?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
+
+                    val next = candidate.copy(
+                        title = edited.title,
+                        start = shiftedStart?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")) ?: candidate.start,
+                        end = shiftedEnd?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")) ?: candidate.end,
+                        allDay = edited.allDay,
+                        memberIds = edited.memberIds,
+                        location = edited.location,
+                        memo = edited.memo,
+                        alarmMinutes = edited.alarmMinutes,
+                        eventSeriesId = candidate.eventSeriesId ?: original.eventSeriesId,
+                        seriesRepeat = edited.seriesRepeat ?: original.seriesRepeat ?: original.repeat.takeIf { it != "none" },
+                        seriesRepeatCount = edited.seriesRepeatCount ?: original.seriesRepeatCount ?: original.repeatCount,
+                        seriesRepeatUntil = edited.seriesRepeatUntil ?: original.seriesRepeatUntil ?: original.repeatUntil,
+                        createdBy = candidate.createdBy ?: auth.currentUser?.uid,
+                    )
+
+                    batch.update(snapshot.reference, "events.${safeKey(candidate.id)}", FieldValue.delete())
+                    val nextRef = db.collection("scheduleDays").document(next.date)
+                    batch.set(nextRef, mapOf("date" to next.date, "events" to mapOf(safeKey(next.id) to next.toMap())), SetOptions.merge())
+                    count++
+                }
+                batch.commit()
+                    .addOnSuccessListener { refreshWidgets(); done(Result.success(count)) }
+                    .addOnFailureListener { done(Result.failure(it)) }
+            }
+            .addOnFailureListener { done(Result.failure(it)) }
+    }
+
+    fun cleanupEliTeacherPhone(done: (Result<Int>) -> Unit) {
+        val markerRef = db.collection("familyData").document("family-main")
+        markerRef.get().addOnSuccessListener { marker ->
+            if (marker.getBoolean("removedEliTeacherPhone20261015") == true) {
+                done(Result.success(0))
+                return@addOnSuccessListener
+            }
+            db.collection("scheduleDays").get()
+                .addOnSuccessListener { snapshots ->
+                    val batch = db.batch()
+                    var count = 0
+                    snapshots.documents.forEach { snapshot ->
+                        parseEvents(snapshot).forEach { candidate ->
+                            if (candidate.kind == "event" && candidate.title.trim() == "엘리하이 담임선생님 전화") {
+                                batch.update(snapshot.reference, "events.${safeKey(candidate.id)}", FieldValue.delete())
+                                count++
+                            }
+                        }
+                    }
+                    batch.set(markerRef, mapOf("removedEliTeacherPhone20261015" to true), SetOptions.merge())
+                    batch.commit()
+                        .addOnSuccessListener { refreshWidgets(); done(Result.success(count)) }
+                        .addOnFailureListener { done(Result.failure(it)) }
+                }
+                .addOnFailureListener { done(Result.failure(it)) }
+        }.addOnFailureListener { done(Result.failure(it)) }
     }
 
     fun checkHomeworkDuplicates(

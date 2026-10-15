@@ -13,6 +13,10 @@ data class FamilyEvent(
     val allDay: Boolean = false,
     val memberIds: List<String> = listOf("me"),
     val kind: String = "event",
+    val eventSeriesId: String? = null,
+    val seriesRepeat: String? = null,
+    val seriesRepeatCount: Int? = null,
+    val seriesRepeatUntil: String? = null,
     val homeworkId: String? = null,
     val homeworkSeriesId: String? = null,
     val homeworkStartDate: String? = null,
@@ -42,6 +46,10 @@ data class FamilyEvent(
         put("id", id); put("title", title); put("start", start)
         end?.let { put("end", it) }
         put("allDay", allDay); put("memberIds", memberIds); put("kind", kind)
+        eventSeriesId?.let { put("eventSeriesId", it) }
+        seriesRepeat?.let { put("seriesRepeat", it) }
+        seriesRepeatCount?.let { put("seriesRepeatCount", it) }
+        seriesRepeatUntil?.let { put("seriesRepeatUntil", it) }
         homeworkId?.let { put("homeworkId", it) }
         homeworkSeriesId?.let { put("homeworkSeriesId", it) }
         homeworkStartDate?.let { put("homeworkStartDate", it) }
@@ -76,6 +84,10 @@ data class FamilyEvent(
                 allDay = data["allDay"] as? Boolean ?: false,
                 memberIds = (data["memberIds"] as? List<*>)?.mapNotNull { it as? String } ?: listOf("me"),
                 kind = data["kind"] as? String ?: "event",
+                eventSeriesId = data["eventSeriesId"] as? String,
+                seriesRepeat = data["seriesRepeat"] as? String,
+                seriesRepeatCount = (data["seriesRepeatCount"] as? Number)?.toInt(),
+                seriesRepeatUntil = data["seriesRepeatUntil"] as? String,
                 homeworkId = data["homeworkId"] as? String,
                 homeworkSeriesId = data["homeworkSeriesId"] as? String,
                 homeworkStartDate = data["homeworkStartDate"] as? String,

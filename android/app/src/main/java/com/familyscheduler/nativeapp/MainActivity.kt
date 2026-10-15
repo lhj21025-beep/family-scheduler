@@ -436,15 +436,58 @@ class MainActivity : ComponentActivity() {
         if (repo.signedMember() != "me" && repo.signedMember() != "wife") return
         val pending = approvals.filter { it.status == "pending" }
         if (pending.isEmpty()) return toast("대기 중인 부모 확인 요청이 없습니다.")
-        val labels = pending.map {
-            "${it.targetDate} · ${it.title}\n요청: ${memberName(it.requestedBy)} ${it.requestedAt.take(16).replace('T',' ')}"
-        }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("✅ 부모 확인")
-            .setItems(labels) { _, which -> showApprovalDecision(pending[which]) }
-            .setNegativeButton("닫기", null)
-            .show()
+
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        pending.forEach { request ->
+            box.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12))
+                background = rounded(0xFFF8FAFC.toInt(), 10f, 0xFFE2E8F0.toInt())
+                addView(TextView(this@MainActivity).apply {
+                    text = request.title
+                    textSize = 16f
+                    typeface = Typeface.DEFAULT_BOLD
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = "숙제일 ${request.targetDate} · 요청 ${formatStoredTimestamp(request.requestedAt)} · ${memberName(request.requestedBy)}"
+                    textSize = 12f
+                    setTextColor(0xFF64748B.toInt())
+                    setPadding(0, dp(3), 0, dp(5))
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = "오늘 기준 이틀 이후 숙제를 미리 완료하려는 요청입니다."
+                    textSize = 13f
+                })
+                val buttons = LinearLayout(this@MainActivity).apply {
+                    gravity = Gravity.END
+                    setPadding(0, dp(8), 0, 0)
+                }
+                buttons.addView(Button(this@MainActivity).apply {
+                    text = "OK · 완료 승인"
+                    setOnClickListener {
+                        repo.decideHomeworkApproval(request, true) { result ->
+                            runOnUiThread {
+                                toast(if (result.isSuccess) "숙제 완료를 승인했습니다." else result.exceptionOrNull()?.message ?: "승인에 실패했습니다.")
+                            }
+                        }
+                    }
+                })
+                buttons.addView(Button(this@MainActivity).apply {
+                    text = "거절"
+                    setOnClickListener {
+                        repo.decideHomeworkApproval(request, false) { result ->
+                            runOnUiThread {
+                                toast(if (result.isSuccess) "숙제 완료 요청을 거절했습니다." else result.exceptionOrNull()?.message ?: "거절 처리에 실패했습니다.")
+                            }
+                        }
+                    }
+                })
+                addView(buttons)
+            }, matchWrap(bottom = 8))
+        }
+        showPanelDialog("✅ 부모 확인", box)
     }
+
 
     private fun showApprovalDecision(request: HomeworkApproval) {
         AlertDialog.Builder(this)
@@ -1040,52 +1083,230 @@ class MainActivity : ComponentActivity() {
         TimePickerDialog(this, { _, h, m -> input.setText(LocalTime.of(h, m).format(DateTimeFormatter.ofPattern("HH:mm"))) }, time.hour, time.minute, true).show()
     }
 
-    private fun showTodaySummary(){
-        val today=LocalDate.now().toString()
-        val todayEvents=allEvents.filter{it.date==today&&it.kind!="homework-complete"}
-        val hw=todayEvents.filter{it.kind=="homework"}
-        val text=buildString{
-            append(members.joinToString("\n\n"){m->
-                val es=todayEvents.filter{it.memberIds.contains(m.id)}
-                "${m.icon} ${m.label}\n"+(if(es.isEmpty())"오늘 일정 없음" else es.joinToString("\n"){e->"${if(e.kind=="homework"||e.allDay)"종일" else e.start.drop(11).take(5)}  ${e.title}"})
-            })
-            append("\n\n📝 오늘 숙제\n")
-            append(if(hw.isEmpty())"없음" else "${hw.count{it.completed}}/${hw.size} 완료")
-            notices.firstOrNull()?.let{notice->append("\n\n📣 최근 가족 메모\n${notice.title}");if(notice.body.isNotBlank())append("\n${notice.body}")}
+    private fun showPanelDialog(titleText: String, content: View): Dialog {
+        val dialog = Dialog(this)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.WHITE)
+            setPadding(dp(16), dp(10), dp(16), dp(12))
         }
-        AlertDialog.Builder(this).setTitle("📌 오늘").setMessage(text).setPositiveButton("닫기",null).show()
+        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        header.addView(TextView(this).apply {
+            text = titleText
+            textSize = 21f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(0xFF202124.toInt())
+        }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        header.addView(Button(this).apply {
+            text = "×"
+            textSize = 20f
+            setOnClickListener { dialog.dismiss() }
+        }, LinearLayout.LayoutParams(dp(52), dp(44)))
+        root.addView(header)
+        root.addView(ScrollView(this).apply { addView(content) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        dialog.setContentView(root)
+        dialog.show()
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        return dialog
     }
-    private fun showStats(){
-        val today=LocalDate.now(); val todayKey=today.toString(); val last30Start=today.minusDays(30).toString()
-        val last30=allEvents.count{it.kind=="event"&&it.date>=last30Start&&it.date<=todayKey}
-        val todayEvents=allEvents.count{it.date==todayKey&&it.kind!="homework-complete"}
-        val hw=allEvents.filter{it.date==todayKey&&it.kind=="homework"}
-        val rate=if(hw.isEmpty())0 else (hw.count{it.completed}*100/hw.size)
-        val completed=allEvents.count{it.kind=="homework"&&it.completed}
-        val memberLines=members.joinToString("\n"){m->"${m.icon} ${m.label}  ${allEvents.count{it.kind=="event"&&it.memberIds.contains(m.id)}}"}
-        val text="최근 30일 일정  ${last30}개\n오늘 일정  ${todayEvents}개\n오늘 숙제 완료율  ${rate}%\n누적 완료 숙제  ${completed}개\n\n구성원별 일정 수\n$memberLines"
-        AlertDialog.Builder(this).setTitle("📊 가족 통계").setMessage(text).setPositiveButton("닫기",null).show()
+
+    private fun showTodaySummary() {
+        val today = LocalDate.now().toString()
+        val todayEvents = allEvents.filter { it.date == today && it.kind != "homework-complete" }
+        val hw = todayEvents.filter { it.kind == "homework" }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        members.forEach { member ->
+            box.addView(TextView(this).apply {
+                text = "${member.icon} ${member.label}"
+                textSize = 18f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(member.color)
+                setPadding(0, dp(10), 0, dp(5))
+            })
+            val rows = todayEvents.filter { it.memberIds.contains(member.id) }
+            if (rows.isEmpty()) {
+                box.addView(TextView(this).apply {
+                    text = "오늘 일정 없음"
+                    setTextColor(0xFF64748B.toInt())
+                    setPadding(dp(8), dp(5), 0, dp(8))
+                })
+            } else {
+                rows.forEach { event ->
+                    box.addView(TextView(this).apply {
+                        text = "${if (event.kind == "homework" || event.allDay) "종일" else event.start.drop(11).take(5)}   ${event.title}"
+                        textSize = 14f
+                        setPadding(dp(10), dp(9), dp(10), dp(9))
+                        background = rounded(0xFFF8FAFC.toInt(), 8f, 0xFFE2E8F0.toInt())
+                        setOnClickListener { showEventDetails(event) }
+                    }, matchWrap(bottom = 5))
+                }
+            }
+        }
+
+        box.addView(TextView(this).apply {
+            text = "📝 오늘 숙제"
+            textSize = 17f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(14), 0, dp(5))
+        })
+        box.addView(TextView(this).apply {
+            text = if (hw.isEmpty()) "없음" else "${hw.count { it.completed }}/${hw.size} 완료"
+            textSize = 15f
+            setPadding(dp(8), dp(6), 0, dp(10))
+        })
+
+        notices.firstOrNull()?.let { notice ->
+            box.addView(TextView(this).apply {
+                text = "📣 최근 가족 메모"
+                textSize = 17f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, dp(14), 0, dp(5))
+            })
+            box.addView(TextView(this).apply {
+                text = buildString {
+                    append(notice.title)
+                    if (notice.body.isNotBlank()) append("\n${notice.body}")
+                }
+                setPadding(dp(10))
+                background = rounded(0xFFF8FAFC.toInt(), 8f, 0xFFE2E8F0.toInt())
+            })
+        }
+        showPanelDialog("📌 오늘", box)
     }
-    private fun showNoticeInfo(){
-        val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(18))}
-        val title=edit("제목","");val body=edit("가족에게 남길 메모나 공지","").apply{minLines=3;gravity=Gravity.TOP}
-        box.addView(title);box.addView(body)
-        box.addView(TextView(this).apply{text="최근 메모";textSize=17f;typeface=Typeface.DEFAULT_BOLD;setPadding(0,dp(14),0,dp(6))})
-        if(notices.isEmpty())box.addView(TextView(this).apply{text="저장된 가족 메모가 없습니다.";setTextColor(0xFF64748B.toInt())})
-        notices.take(10).forEach{notice->box.addView(LinearLayout(this).apply{
-            orientation=LinearLayout.VERTICAL;setPadding(dp(10));background=rounded(0xFFF8FAFC.toInt(),10f,0xFFE2E8F0.toInt())
-            addView(TextView(this@MainActivity).apply{text=notice.title;typeface=Typeface.DEFAULT_BOLD;textSize=15f})
-            if(notice.body.isNotBlank())addView(TextView(this@MainActivity).apply{text=notice.body;textSize=13f;setTextColor(0xFF475569.toInt());setPadding(0,dp(3),0,0)})
-        },matchWrap(bottom=6))}
-        val alert=AlertDialog.Builder(this).setTitle("📣 가족 메모 / 공지").setView(ScrollView(this).apply{addView(box)}).setPositiveButton("저장",null).setNegativeButton("닫기",null).create()
-        alert.setOnShowListener{alert.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
-            if(title.text.isBlank()&&body.text.isBlank())return@setOnClickListener toast("제목이나 내용을 입력해 주세요.")
-            val notice=FamilyNotice(title=title.text.toString().trim().ifBlank{"가족 메모"},body=body.text.toString().trim(),createdBy=repo.signedMember())
-            alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled=false
-            repo.saveNotices(listOf(notice)+notices){result->runOnUiThread{if(result.isSuccess)alert.dismiss() else alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled=true;toast(if(result.isSuccess)"가족 메모를 저장했습니다." else "가족 메모를 저장하지 못했습니다.")}}
-        }}
-        alert.show()
+
+
+    private fun showStats() {
+        val today = LocalDate.now()
+        val todayKey = today.toString()
+        val last30Start = today.minusDays(30).toString()
+        val last30 = allEvents.count { it.kind == "event" && it.date >= last30Start && it.date <= todayKey }
+        val todayEvents = allEvents.count { it.date == todayKey && it.kind != "homework-complete" }
+        val hw = allEvents.filter { it.date == todayKey && it.kind == "homework" }
+        val rate = if (hw.isEmpty()) 0 else (hw.count { it.completed } * 100 / hw.size)
+        val completed = allEvents.count { it.kind == "homework" && it.completed }
+
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        listOf(
+            "최근 30일 일정" to "${last30}개",
+            "오늘 일정" to "${todayEvents}개",
+            "오늘 숙제 완료율" to "${rate}%",
+            "누적 완료 숙제" to "${completed}개"
+        ).forEach { (labelText, valueText) ->
+            box.addView(LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(14))
+                background = rounded(0xFFF8FAFC.toInt(), 10f, 0xFFE2E8F0.toInt())
+                addView(TextView(this@MainActivity).apply {
+                    text = labelText
+                    textSize = 15f
+                    setTextColor(0xFF475569.toInt())
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(TextView(this@MainActivity).apply {
+                    text = valueText
+                    textSize = 22f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(0xFF1A73E8.toInt())
+                })
+            }, matchWrap(bottom = 8))
+        }
+        box.addView(TextView(this).apply {
+            text = "구성원별 일정 수"
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(14), 0, dp(6))
+        })
+        members.forEach { m ->
+            box.addView(LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                addView(TextView(this@MainActivity).apply {
+                    text = "${m.icon} ${m.label}"
+                    textSize = 15f
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(TextView(this@MainActivity).apply {
+                    text = allEvents.count { it.kind == "event" && it.memberIds.contains(m.id) }.toString()
+                    typeface = Typeface.DEFAULT_BOLD
+                })
+            })
+        }
+        showPanelDialog("📊 가족 통계", box)
     }
+
+
+    private fun showNoticeInfo() {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val title = edit("제목", "")
+        val body = edit("가족에게 남길 메모나 공지", "").apply { minLines = 4; gravity = Gravity.TOP }
+        box.addView(title, matchWrap(bottom = 6))
+        box.addView(body, matchWrap(bottom = 8))
+        val save = Button(this).apply {
+            text = "저장"
+            setOnClickListener {
+                if (title.text.isBlank() && body.text.isBlank()) {
+                    toast("제목이나 내용을 입력해 주세요.")
+                    return@setOnClickListener
+                }
+                isEnabled = false
+                val notice = FamilyNotice(
+                    title = title.text.toString().trim().ifBlank { "가족 메모" },
+                    body = body.text.toString().trim(),
+                    createdBy = repo.signedMember()
+                )
+                repo.saveNotices(listOf(notice) + notices) { result ->
+                    runOnUiThread {
+                        isEnabled = true
+                        if (result.isSuccess) {
+                            title.setText("")
+                            body.setText("")
+                            toast("가족 메모를 저장했습니다.")
+                        } else toast("가족 메모를 저장하지 못했습니다.")
+                    }
+                }
+            }
+        }
+        box.addView(save, matchWrap(bottom = 10))
+        box.addView(TextView(this).apply {
+            text = "최근 메모"
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(12), 0, dp(6))
+        })
+        if (notices.isEmpty()) {
+            box.addView(TextView(this).apply {
+                text = "저장된 가족 메모가 없습니다."
+                setTextColor(0xFF64748B.toInt())
+            })
+        } else {
+            notices.forEach { notice ->
+                box.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12))
+                    background = rounded(0xFFF8FAFC.toInt(), 10f, 0xFFE2E8F0.toInt())
+                    addView(TextView(this@MainActivity).apply {
+                        text = notice.title
+                        typeface = Typeface.DEFAULT_BOLD
+                        textSize = 15f
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = formatStoredTimestamp(notice.createdAt)
+                        textSize = 11f
+                        setTextColor(0xFF64748B.toInt())
+                        setPadding(0, dp(2), 0, dp(3))
+                    })
+                    if (notice.body.isNotBlank()) addView(TextView(this@MainActivity).apply {
+                        text = notice.body
+                        textSize = 13f
+                        setTextColor(0xFF475569.toInt())
+                    })
+                }, matchWrap(bottom = 7))
+            }
+        }
+        showPanelDialog("📣 가족 메모 / 공지", box)
+    }
+
+
     private fun showSettings(){
         val items=arrayOf("🔔 알림 권한 및 정확한 알람 설정","테스트 알림","🚪 로그아웃")
         AlertDialog.Builder(this).setTitle("⚙️ 알림 / 앱 설정").setItems(items){_,which->

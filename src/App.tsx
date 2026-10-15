@@ -425,6 +425,47 @@ export default function App() {
     };
     void run();
   }, []);
+  useEffect(() => {
+    if (!auth.currentUser) return;
+    const run = async () => {
+      try {
+        const marker = doc(db, "familyData", FAMILY_ID);
+        const markerSnap = await getDoc(marker);
+        if (markerSnap.data()?.removedEliTeacherPhone20261015) return;
+
+        const days = await getDocs(collection(db, "scheduleDays"));
+        const batch = writeBatch(db);
+        let removed = 0;
+        days.docs.forEach((daySnap) => {
+          const data = daySnap.data() as DayDoc;
+          Object.values(data.events ?? {}).forEach((event) => {
+            if (
+              event.kind === "event" &&
+              event.title.trim() === "엘리하이 담임선생님 전화"
+            ) {
+              batch.update(
+                daySnap.ref,
+                new FieldPath("events", eventFieldKey(event.id)),
+                deleteField(),
+              );
+              removed++;
+            }
+          });
+        });
+        batch.set(
+          marker,
+          { removedEliTeacherPhone20261015: true },
+          { merge: true },
+        );
+        await batch.commit();
+        if (removed) flash(`엘리하이 담임선생님 전화 일정 ${removed}개를 삭제했습니다.`);
+      } catch (error) {
+        console.error("teacher phone cleanup failed", error);
+      }
+    };
+    void run();
+  }, []);
+
   const flash = (s: string) => {
     setNotice(s);
     setTimeout(() => setNotice(""), 2200);

@@ -3,7 +3,6 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedInFamily() {
       return request.auth != null
-        && request.auth.token.email_verified == true
         && request.auth.token.email in [
           'dad@family-scheduler.app',
           'mom@family-scheduler.app',

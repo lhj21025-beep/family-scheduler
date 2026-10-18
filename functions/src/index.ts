@@ -21,6 +21,9 @@ type EventItem = {
   kind?: 'event' | 'homework' | 'homework-complete'
   location?: string
   alarmMinutes?: Alarm[]
+  completed?: boolean
+  completedAt?: string
+  completedBy?: MemberId
 }
 type PushToken = { token: string; memberId: MemberId; updatedAt?: string }
 
@@ -56,6 +59,30 @@ function sentKey(eventId: string, alarmMinutes: number) {
   return `${eventId}_${alarmMinutes}`.replace(/[^A-Za-z0-9_]/g, '_')
 }
 
+function cleanHomeworkTitle(title: string) {
+  return title
+    .replace(/^(?:(?:📝|✅|☑️|☑|✔️|✔)\s*)+/u, '')
+    .replace(/^숙제 완료\s*·\s*/, '')
+    .trim()
+}
+
+function completionEpoch(value?: string) {
+  if (!value) return 0
+  const zoned = /(?:Z|[+-]\d{2}:\d{2})$/.test(value)
+  const parsed = Date.parse(zoned ? value : `${value}+09:00`)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function completionKstDate(value?: string) {
+  const epoch = completionEpoch(value)
+  return epoch ? kstDateKey(new Date(epoch)) : ''
+}
+
+function completionKstTime(value?: string) {
+  const epoch = completionEpoch(value)
+  return epoch ? kstMinute(new Date(epoch)).slice(11, 16) : '--:--'
+}
+
 export const sendScheduleReminders = onSchedule(
   {
     schedule: '* * * * *',
@@ -76,7 +103,11 @@ export const sendScheduleReminders = onSchedule(
 
     if (!daySnap.exists || !familySnap.exists) return
 
-    const day = daySnap.data() as { events?: Record<string, EventItem>; sentAlarms?: Record<string, string> }
+    const day = daySnap.data() as {
+      events?: Record<string, EventItem>
+      sentAlarms?: Record<string, string>
+      homeworkAllCompleteNotifiedAt?: string
+    }
     const family = familySnap.data() as FamilyData
     const events = Object.values(day.events ?? {})
     const sentAlarms = day.sentAlarms ?? {}
@@ -104,6 +135,38 @@ export const sendScheduleReminders = onSchedule(
       }
     }
 
+    const homeworks = events.filter(
+      event => event.kind === 'homework' && event.memberIds?.includes('son'),
+    )
+    const allHomeworkCompleted =
+      homeworks.length > 0 && homeworks.every(homework => homework.completed && homework.completedAt)
+    const latestHomework = allHomeworkCompleted
+      ? [...homeworks].sort((a, b) => completionEpoch(b.completedAt) - completionEpoch(a.completedAt))[0]
+      : undefined
+    const shouldSendHomeworkComplete =
+      allHomeworkCompleted &&
+      !day.homeworkAllCompleteNotifiedAt &&
+      latestHomework?.completedBy === 'son' &&
+      completionKstDate(latestHomework.completedAt) === today
+
+    if (shouldSendHomeworkComplete) {
+      const parentTokens = pushTokens.filter(token => token.memberId === 'me' || token.memberId === 'wife')
+      if (parentTokens.length) {
+        const homeworkLines = [...homeworks]
+          .sort((a, b) => completionEpoch(a.completedAt) - completionEpoch(b.completedAt))
+          .map(homework => `${cleanHomeworkTitle(homework.title)} · ${completionKstTime(homework.completedAt)} 완료`)
+        const body = `오늘 숙제를 모두 완료했어요.\n${homeworkLines.join('\n')}`
+        for (const recipient of parentTokens) {
+          messages.push({
+            token: recipient.token,
+            title: '✅ 강천이 오늘 숙제를 모두 완료했어요',
+            body,
+            key: 'homework_all_complete',
+          })
+        }
+      }
+    }
+
     if (!messages.length) return
 
     const unique = new Map<string, { token: string; title: string; body: string; key: string }>()
@@ -125,6 +188,15 @@ export const sendScheduleReminders = onSchedule(
     pending.forEach((m, index) => {
       if (response.responses[index]?.success) updates[`sentAlarms.${m.key}`] = now.toISOString()
     })
+
+    if (shouldSendHomeworkComplete) {
+      const homeworkPushes = pending
+        .map((message, index) => ({ message, response: response.responses[index] }))
+        .filter(item => item.message.key === 'homework_all_complete')
+      if (homeworkPushes.some(item => item.response?.success)) {
+        updates.homeworkAllCompleteNotifiedAt = now.toISOString()
+      }
+    }
 
     if (Object.keys(updates).length) {
       await daySnap.ref.update(updates)

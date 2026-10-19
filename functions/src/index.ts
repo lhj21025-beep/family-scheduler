@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase-admin/app'
 import { getFirestore } from 'firebase-admin/firestore'
 import { getMessaging } from 'firebase-admin/messaging'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
+import { onDocumentUpdated } from 'firebase-functions/v2/firestore'
 import { logger } from 'firebase-functions'
 
 initializeApp()
@@ -205,6 +206,103 @@ export const sendScheduleReminders = onSchedule(
     logger.info('Schedule reminders processed', {
       minute: nowMinute,
       messages: pending.length,
+      success: response.successCount,
+      failure: response.failureCount,
+    })
+  },
+)
+
+
+export const notifyDailyHomeworkComplete = onDocumentUpdated(
+  {
+    document: 'scheduleDays/{date}',
+    region: 'asia-northeast3',
+    memory: '256MiB',
+    maxInstances: 2,
+  },
+  async event => {
+    const date = event.params.date
+    const beforeData = event.data?.before.data() as {
+      events?: Record<string, EventItem>
+      homeworkAllCompleteNotifiedAt?: string
+    } | undefined
+    const afterData = event.data?.after.data() as {
+      events?: Record<string, EventItem>
+      homeworkAllCompleteNotifiedAt?: string
+    } | undefined
+    if (!afterData) return
+
+    const today = kstDateKey(new Date())
+    if (date !== today || afterData.homeworkAllCompleteNotifiedAt) return
+
+    const beforeHomeworks = Object.values(beforeData?.events ?? {}).filter(
+      item => item.kind === 'homework' && item.memberIds?.includes('son'),
+    )
+    const homeworks = Object.values(afterData.events ?? {}).filter(
+      item => item.kind === 'homework' && item.memberIds?.includes('son'),
+    )
+    if (!homeworks.length) return
+
+    const beforeAllComplete =
+      beforeHomeworks.length > 0 &&
+      beforeHomeworks.every(item => item.completed && item.completedAt)
+    const allComplete =
+      homeworks.every(item => item.completed && item.completedAt)
+
+    // Only notify at the moment today's list changes from incomplete to complete.
+    if (beforeAllComplete || !allComplete) return
+
+    const latestHomework = [...homeworks]
+      .sort((a, b) => completionEpoch(b.completedAt) - completionEpoch(a.completedAt))[0]
+    if (
+      latestHomework?.completedBy !== 'son' ||
+      completionKstDate(latestHomework.completedAt) !== today
+    ) return
+
+    const familySnap = await db.collection('familyData').doc(FAMILY_ID).get()
+    const family = familySnap.data() as FamilyData | undefined
+    const parentTokens = Object.values(family?.pushTokens ?? {})
+      .filter(item => item?.token && (item.memberId === 'me' || item.memberId === 'wife'))
+    if (!parentTokens.length) {
+      logger.warn('No parent push tokens registered for homework completion notification', { date })
+      return
+    }
+
+    const homeworkLines = [...homeworks]
+      .sort((a, b) => completionEpoch(a.completedAt) - completionEpoch(b.completedAt))
+      .map(item => `${cleanHomeworkTitle(item.title)} · ${completionKstTime(item.completedAt)} 완료`)
+
+    const title = '✅ 강천이 오늘 숙제를 모두 완료했어요'
+    const body = `오늘 숙제를 모두 완료했어요.\n${homeworkLines.join('\n')}`
+
+    const response = await getMessaging().sendEach(
+      parentTokens.map(item => ({
+        token: item.token,
+        notification: { title, body },
+        data: { title, body, type: 'homework_all_complete', date },
+        android: {
+          priority: 'high' as const,
+          notification: { channelId: 'family_schedule_alerts' },
+        },
+        webpush: {
+          fcmOptions: { link: 'https://lhj21025-beep.github.io/family-scheduler/' },
+          notification: {
+            icon: 'https://lhj21025-beep.github.io/family-scheduler/favicon.svg',
+          },
+        },
+      })),
+    )
+
+    if (response.successCount > 0) {
+      await event.data?.after.ref.update({
+        homeworkAllCompleteNotifiedAt: new Date().toISOString(),
+      })
+    }
+
+    logger.info('Daily homework completion notification processed', {
+      date,
+      homeworkCount: homeworks.length,
+      recipients: parentTokens.length,
       success: response.successCount,
       failure: response.failureCount,
     })

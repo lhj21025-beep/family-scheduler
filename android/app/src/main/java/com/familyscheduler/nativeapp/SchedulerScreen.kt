@@ -66,6 +66,7 @@ fun SchedulerScreen(
     var selectedMembers by remember { mutableStateOf(members.map { it.id }.toSet()) }
     var query by remember { mutableStateOf("") }
     var searchOpen by remember { mutableStateOf(false) }
+    var searchDialogOpen by remember { mutableStateOf(false) }
     var searchLoading by remember { mutableStateOf(false) }
     var searchError by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf(emptyList<FamilyEvent>()) }
@@ -90,7 +91,7 @@ fun SchedulerScreen(
             background = Color.White,
         )
     ) {
-        Surface(Modifier.fillMaxSize(), color = Color.White) {
+        Surface(Modifier.fillMaxSize().statusBarsPadding(), color = Color.White) {
             if (searchOpen) {
                 SearchResultsScreen(
                     query = query,
@@ -105,19 +106,28 @@ fun SchedulerScreen(
             } else {
                 Column(Modifier.fillMaxSize()) {
                     Row(
-                        Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 14.dp),
+                        Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("📅", fontSize = 24.sp)
+                        Text("📅", fontSize = 22.sp)
                         Text(
                             "우리 가족 스케줄러",
                             Modifier.padding(start = 8.dp).weight(1f),
-                            fontSize = 20.sp,
+                            fontSize = 19.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        TextButton(onClick = onSettings) { Text("⚙️", fontSize = 20.sp) }
+                        TextButton(
+                            onClick = { searchDialogOpen = true },
+                            contentPadding = PaddingValues(0.dp),
+                            modifier = Modifier.size(42.dp),
+                        ) { Text("🔍", fontSize = 19.sp) }
+                        TextButton(
+                            onClick = onSettings,
+                            contentPadding = PaddingValues(0.dp),
+                            modifier = Modifier.size(42.dp),
+                        ) { Text("⚙️", fontSize = 20.sp) }
                     }
 
                     HorizontalActionBar(
@@ -131,7 +141,7 @@ fun SchedulerScreen(
 
                     Row(
                         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                            .padding(horizontal = 10.dp, vertical = 1.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text("가족", fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 8.dp))
@@ -143,13 +153,11 @@ fun SchedulerScreen(
                                         if (member.id in selectedMembers) selectedMembers - member.id
                                         else selectedMembers + member.id
                                 },
-                                label = { Text("${member.icon} ${member.label}") },
-                                modifier = Modifier.padding(end = 6.dp),
+                                label = { Text("${member.icon} ${member.label}", fontSize = 12.sp) },
+                                modifier = Modifier.padding(end = 5.dp).height(36.dp),
                             )
                         }
                     }
-
-                    ScheduleSearchBar(query, { query = it }, ::runSearch)
 
                     CalendarToolbar(
                         month = month,
@@ -218,6 +226,37 @@ fun SchedulerScreen(
                         }
                     }
                 }
+
+                if (searchDialogOpen) {
+                    AlertDialog(
+                        onDismissRequest = { searchDialogOpen = false },
+                        title = { Text("일정 검색") },
+                        text = {
+                            OutlinedTextField(
+                                value = query,
+                                onValueChange = { query = it },
+                                singleLine = true,
+                                placeholder = { Text("일정·장소·메모 입력") },
+                                leadingIcon = { Text("🔍") },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    if (query.isNotBlank()) {
+                                        searchDialogOpen = false
+                                        runSearch()
+                                    }
+                                },
+                                enabled = query.isNotBlank(),
+                            ) { Text("검색") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { searchDialogOpen = false }) { Text("취소") }
+                        },
+                    )
+                }
             }
         }
     }
@@ -235,7 +274,7 @@ private fun HorizontalActionBar(
 ) {
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-            .padding(horizontal = 10.dp, vertical = 3.dp)
+            .padding(horizontal = 8.dp, vertical = 1.dp)
     ) {
         SmallAction("📌 오늘", onToday)
         SmallAction("📣 가족 메모", onNotice)
@@ -245,8 +284,8 @@ private fun HorizontalActionBar(
         Button(
             onClick = onAdd,
             shape = RoundedCornerShape(7.dp),
-            contentPadding = PaddingValues(horizontal = 13.dp),
-            modifier = Modifier.height(40.dp),
+            contentPadding = PaddingValues(horizontal = 11.dp),
+            modifier = Modifier.height(36.dp),
         ) { Text("＋ 일정 추가") }
     }
 }
@@ -256,23 +295,9 @@ private fun SmallAction(label: String, click: () -> Unit) {
     OutlinedButton(
         onClick = click,
         shape = RoundedCornerShape(7.dp),
-        contentPadding = PaddingValues(horizontal = 11.dp),
-        modifier = Modifier.padding(end = 6.dp).height(40.dp),
-    ) { Text(label, color = GoogleText, fontSize = 12.sp) }
-}
-
-@Composable
-private fun ScheduleSearchBar(query: String, onChange: (String) -> Unit, onSearch: () -> Unit) {
-    OutlinedTextField(
-        value = query,
-        onValueChange = onChange,
-        singleLine = true,
-        placeholder = { Text("일정·장소·메모 검색") },
-        leadingIcon = { Text("🔍") },
-        trailingIcon = { TextButton(onClick = onSearch) { Text("검색") } },
-        shape = RoundedCornerShape(7.dp),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp),
-    )
+        contentPadding = PaddingValues(horizontal = 9.dp),
+        modifier = Modifier.padding(end = 5.dp).height(36.dp),
+    ) { Text(label, color = GoogleText, fontSize = 11.sp) }
 }
 
 @Composable
@@ -288,20 +313,66 @@ private fun CalendarToolbar(
     val title = when (viewMode) {
         "month" -> month.format(DateTimeFormatter.ofPattern("yyyy년 M월"))
         "day" -> selectedDate.format(DateTimeFormatter.ofPattern("yyyy년 M월 d일"))
-        else -> {
-            val start = selectedDate.minusDays((selectedDate.dayOfWeek.value - 1).toLong())
-            val end = start.plusDays(6)
-            "${start.monthValue}월 ${start.dayOfMonth}일 – ${end.monthValue}월 ${end.dayOfMonth}일"
-        }
+        else -> ""
     }
 
     BoxWithConstraints(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp)
     ) {
         val availableWidth = maxWidth
         val compact = availableWidth < 600.dp
 
-        if (compact) {
+        @Composable
+        fun ModeButtons(compactButtons: Boolean) {
+            Row {
+                listOf("month" to "월", "week" to "주", "day" to "일").forEach { (mode, label) ->
+                    val modifier = if (compactButtons) {
+                        Modifier.height(34.dp).widthIn(min = 50.dp)
+                    } else {
+                        Modifier.height(36.dp)
+                    }
+                    if (viewMode == mode) {
+                        Button(
+                            onClick = { onMode(mode) },
+                            contentPadding = PaddingValues(horizontal = if (compactButtons) 11.dp else 10.dp),
+                            modifier = modifier,
+                        ) { Text(label, maxLines = 1) }
+                    } else {
+                        OutlinedButton(
+                            onClick = { onMode(mode) },
+                            contentPadding = PaddingValues(horizontal = if (compactButtons) 11.dp else 10.dp),
+                            modifier = modifier,
+                        ) { Text(label, color = GoogleText, maxLines = 1) }
+                    }
+                    Spacer(Modifier.width(3.dp))
+                }
+            }
+        }
+
+        if (compact && viewMode == "week") {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(
+                    onClick = onPrevious,
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.size(36.dp),
+                ) { Text("‹", fontSize = 22.sp) }
+                OutlinedButton(
+                    onClick = onNext,
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.padding(start = 3.dp).size(36.dp),
+                ) { Text("›", fontSize = 22.sp) }
+                TextButton(
+                    onClick = onToday,
+                    contentPadding = PaddingValues(horizontal = 7.dp),
+                    modifier = Modifier.height(36.dp),
+                ) { Text("오늘", maxLines = 1) }
+                Spacer(Modifier.weight(1f))
+                ModeButtons(true)
+            }
+        } else if (compact) {
             Column(Modifier.fillMaxWidth()) {
                 Row(
                     Modifier.fillMaxWidth(),
@@ -310,22 +381,21 @@ private fun CalendarToolbar(
                     OutlinedButton(
                         onClick = onPrevious,
                         contentPadding = PaddingValues(0.dp),
-                        modifier = Modifier.size(38.dp),
-                    ) { Text("‹", fontSize = 23.sp) }
+                        modifier = Modifier.size(36.dp),
+                    ) { Text("‹", fontSize = 22.sp) }
                     OutlinedButton(
                         onClick = onNext,
                         contentPadding = PaddingValues(0.dp),
-                        modifier = Modifier.padding(start = 4.dp).size(38.dp),
-                    ) { Text("›", fontSize = 23.sp) }
+                        modifier = Modifier.padding(start = 3.dp).size(36.dp),
+                    ) { Text("›", fontSize = 22.sp) }
                     TextButton(
                         onClick = onToday,
-                        contentPadding = PaddingValues(horizontal = 8.dp),
-                        modifier = Modifier.padding(start = 2.dp)
+                        contentPadding = PaddingValues(horizontal = 7.dp),
+                        modifier = Modifier.height(36.dp),
                     ) { Text("오늘", maxLines = 1) }
-
                     Text(
                         title,
-                        Modifier.weight(1f).padding(horizontal = 6.dp),
+                        Modifier.weight(1f).padding(horizontal = 5.dp),
                         textAlign = TextAlign.Center,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = if (availableWidth < 380.dp) 13.sp else 15.sp,
@@ -334,28 +404,10 @@ private fun CalendarToolbar(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-
                 Row(
-                    Modifier.fillMaxWidth().padding(top = 4.dp),
+                    Modifier.fillMaxWidth().padding(top = 2.dp),
                     horizontalArrangement = Arrangement.End,
-                ) {
-                    listOf("month" to "월", "week" to "주", "day" to "일").forEach { (mode, label) ->
-                        if (viewMode == mode) {
-                            Button(
-                                onClick = { onMode(mode) },
-                                contentPadding = PaddingValues(horizontal = 14.dp),
-                                modifier = Modifier.height(36.dp).widthIn(min = 58.dp),
-                            ) { Text(label, maxLines = 1) }
-                        } else {
-                            OutlinedButton(
-                                onClick = { onMode(mode) },
-                                contentPadding = PaddingValues(horizontal = 14.dp),
-                                modifier = Modifier.height(36.dp).widthIn(min = 58.dp),
-                            ) { Text(label, color = GoogleText, maxLines = 1) }
-                        }
-                        Spacer(Modifier.width(4.dp))
-                    }
-                }
+                ) { ModeButtons(true) }
             }
         } else {
             Row(
@@ -372,34 +424,22 @@ private fun CalendarToolbar(
                     contentPadding = PaddingValues(0.dp),
                     modifier = Modifier.padding(start = 4.dp).size(40.dp),
                 ) { Text("›", fontSize = 24.sp) }
-                TextButton(onClick = onToday, modifier = Modifier.padding(start = 2.dp)) { Text("오늘") }
-                Text(
-                    title,
-                    Modifier.weight(1f),
-                    textAlign = TextAlign.Center,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Row {
-                    listOf("month" to "월", "week" to "주", "day" to "일").forEach { (mode, label) ->
-                        if (viewMode == mode) {
-                            Button(
-                                onClick = { onMode(mode) },
-                                contentPadding = PaddingValues(horizontal = 10.dp),
-                                modifier = Modifier.height(36.dp),
-                            ) { Text(label) }
-                        } else {
-                            OutlinedButton(
-                                onClick = { onMode(mode) },
-                                contentPadding = PaddingValues(horizontal = 10.dp),
-                                modifier = Modifier.height(36.dp),
-                            ) { Text(label, color = GoogleText) }
-                        }
-                    }
+                TextButton(onClick = onToday) { Text("오늘") }
+                if (title.isNotBlank()) {
+                    Text(
+                        title,
+                        Modifier.weight(1f),
+                        textAlign = TextAlign.Center,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
                 }
+                ModeButtons(false)
             }
         }
     }
@@ -506,7 +546,7 @@ private fun TimeCalendar(
             Spacer(Modifier.width(timeAxisWidth))
             days.forEach { day ->
                 Column(
-                    Modifier.weight(1f).padding(vertical = 4.dp),
+                    Modifier.weight(1f).padding(vertical = if (compactWeek) 2.dp else 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
@@ -516,9 +556,9 @@ private fun TimeCalendar(
                     )
                     Text(
                         day.dayOfMonth.toString(),
-                        Modifier.size(if (compactWeek) 24.dp else 28.dp)
+                        Modifier.size(if (compactWeek) 22.dp else 28.dp)
                             .background(if (day == LocalDate.now()) GoogleBlue else Color.Transparent, CircleShape)
-                            .padding(top = 4.dp),
+                            .padding(top = if (compactWeek) 3.dp else 4.dp),
                         textAlign = TextAlign.Center,
                         color = if (day == LocalDate.now()) Color.White else GoogleText,
                     )
@@ -604,7 +644,7 @@ private fun AllDayLane(
     compactWeek: Boolean,
 ) {
     Row(
-        Modifier.fillMaxWidth().background(Color(0xFFF8F9FA)).padding(vertical = 3.dp)
+        Modifier.fillMaxWidth().background(Color(0xFFF8F9FA)).padding(vertical = if (compactWeek) 1.dp else 3.dp)
     ) {
         Text(
             "종일",
@@ -617,7 +657,7 @@ private fun AllDayLane(
         days.forEach { day ->
             Column(
                 Modifier.weight(1f).border(0.5.dp, GoogleBorder)
-                    .padding(horizontal = if (compactWeek) 1.dp else 2.dp, vertical = 2.dp)
+                    .padding(horizontal = if (compactWeek) 1.dp else 2.dp, vertical = if (compactWeek) 1.dp else 2.dp)
             ) {
                 val dayAll = allDayEvents.filter { it.date == day.toString() }
                 if (dayAll.isEmpty()) {
@@ -719,13 +759,14 @@ private fun EventPill(event: FamilyEvent, onEvent: (FamilyEvent) -> Unit, size: 
         event.title,
         color = Color.White,
         fontSize = size.sp,
+        lineHeight = (size + 2).sp,
         maxLines = 1,
         softWrap = false,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
+        modifier = Modifier.fillMaxWidth().padding(top = 1.dp)
             .background(Color(eventColorLong(event)), RoundedCornerShape(4.dp))
             .clickable { onEvent(event) }
-            .padding(horizontal = 2.dp, vertical = 2.dp),
+            .padding(horizontal = 2.dp, vertical = 1.dp),
     )
 }
 

@@ -43,3 +43,7 @@ npm run build
 현재 Firebase 데이터는 로그인 사용자 여부를 기준으로 접근을 제한하는 초기 규칙입니다. 실제 가족별 접근 제어를 적용하기 전에는 `familyId` membership 검증을 추가하는 것을 권장합니다.
 
 백그라운드 푸시 알림(앱이 완전히 닫힌 상태)은 향후 Firebase Cloud Messaging으로 확장할 수 있습니다.
+
+## Google Calendar 수동 동기화
+
+아빠 계정에서 상단의 Google 동기화 버튼으로 실행합니다. Google Cloud OAuth 웹 클라이언트 ID를 GitHub Actions 저장소 Secret `GOOGLE_CALENDAR_CLIENT_ID`로 설정하고 Firestore 규칙을 게시해야 동작합니다. Google Calendar의 공개(`public`) 일정 중 제목에 `가족`이 포함된 일정만 읽습니다.

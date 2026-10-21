@@ -1641,7 +1641,7 @@ export default function App() {
             {currentMember === "me" && <section className="setting-note" aria-label="Google Calendar 동기화">
               <h3>Google Calendar 수동 동기화</h3>
               <p>연결 계정: lhj21025@gmail.com</p>
-              <p>모든 캘린더 중 제목에 <b>가족</b>이 포함되고 공개로 지정된 일정만 가져옵니다. 구글 일정은 읽기 전용입니다.</p>
+              <p>모든 캘린더 중 제목에 <b>[가족]</b>이 포함되고 기본 공개 또는 전체 공개인 일정만 가져옵니다. 구글 일정은 읽기 전용입니다.</p>
               <div className="setting-actions">
                 <button className="save-btn" disabled={googleSyncBusy} onClick={() => void runGoogleSync()}>{googleSyncBusy ? "동기화 중…" : "Google 일정 동기화"}</button>
               </div>

@@ -34,6 +34,7 @@ jobs:
       - name: Build
         env:
           VITE_FIREBASE_VAPID_KEY: ${{ secrets.FIREBASE_VAPID_KEY }}
+          VITE_GOOGLE_CALENDAR_CLIENT_ID: ${{ secrets.GOOGLE_CALENDAR_CLIENT_ID }}
         run: npm run build
 
       - name: Upload artifact

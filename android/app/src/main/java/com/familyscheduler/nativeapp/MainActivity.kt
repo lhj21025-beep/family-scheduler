@@ -21,6 +21,7 @@ import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -39,6 +40,11 @@ import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
     private val repo = FamilyRepository()
+    private val calendarPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) performGoogleCalendarSync()
+            else toast("Google 캘린더를 읽으려면 캘린더 권한을 허용해주세요.")
+        }
     private var month = YearMonth.now()
     private var selectedDate = LocalDate.now()
     private var allEvents = emptyList<FamilyEvent>()
@@ -128,6 +134,8 @@ class MainActivity : ComponentActivity() {
                 onNotice = { showNoticeInfo() },
                 onStats = { showStats() },
                 onHomework = { date -> selectedDate = date; showHomeworkDialog() },
+                showGoogleSync = repo.signedMember() == "me",
+                onGoogleSync = { startGoogleCalendarSync() },
                 approvalCount = if (repo.signedMember() == "me" || repo.signedMember() == "wife") approvals.count { it.status == "pending" } else 0,
                 onApprovals = { showApprovalRequests() },
                 onSettings = { showSettings() },
@@ -146,6 +154,36 @@ class MainActivity : ComponentActivity() {
             }
         }
         listenMonth()
+    }
+
+    private fun startGoogleCalendarSync() {
+        if (repo.signedMember() != "me") {
+            toast("Google 동기화는 아빠 계정에서만 사용할 수 있습니다.")
+            return
+        }
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            performGoogleCalendarSync()
+        } else {
+            calendarPermissionLauncher.launch(Manifest.permission.READ_CALENDAR)
+        }
+    }
+
+    private fun performGoogleCalendarSync() {
+        toast("Google 캘린더 동기화 중…")
+        repo.syncGoogleCalendarFromDevice(this) { result ->
+            runOnUiThread {
+                result.onSuccess { sync ->
+                    toast(
+                        "Google 동기화 완료 · 추가 ${sync.added}, 수정 ${sync.updated}, 삭제 ${sync.removed}, 그대로 ${sync.unchanged}"
+                    )
+                    listenMonth()
+                }.onFailure { error ->
+                    toast(error.message ?: "Google 캘린더 동기화에 실패했습니다.")
+                }
+            }
+        }
     }
 
     @Suppress("unused")

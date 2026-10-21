@@ -1,5 +1,8 @@
 package com.familyscheduler.nativeapp
 
+import android.content.ContentUris
+import android.content.Context
+import android.provider.CalendarContract
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -7,13 +10,39 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.messaging.FirebaseMessaging
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.YearMonth
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.Duration
 import java.time.temporal.ChronoUnit
 import java.security.MessageDigest
+
+data class GoogleCalendarSyncResult(
+    val added: Int,
+    val updated: Int,
+    val removed: Int,
+    val unchanged: Int,
+    val calendars: Int,
+)
+
+private data class GoogleCalendarSyncRow(
+    val day: String,
+    val fingerprint: String,
+    val event: FamilyEvent,
+)
+
+private data class GoogleCalendarSyncAction(
+    val day: String,
+    val id: String,
+    val value: FamilyEvent? = null,
+)
+
+private const val GOOGLE_CALENDAR_OWNER = "lhj21025@gmail.com"
+private const val GOOGLE_CALENDAR_KEYWORD = "[가족]"
 
 class FamilyRepository {
     private val auth = FirebaseAuth.getInstance()
@@ -607,6 +636,304 @@ class FamilyRepository {
                 done(Result.success(rows))
             }
             .addOnFailureListener { done(Result.failure(it)) }
+    }
+
+    fun syncGoogleCalendarFromDevice(
+        context: Context,
+        done: (Result<GoogleCalendarSyncResult>) -> Unit,
+    ) {
+        if (auth.currentUser?.email?.lowercase() != "dad@family-scheduler.app") {
+            done(Result.failure(IllegalStateException("가족 스케줄러의 아빠 계정으로 로그인해주세요.")))
+            return
+        }
+
+        Thread {
+            try {
+                val freshResult = readGoogleCalendarRows(context)
+                val fresh = freshResult.first
+                val calendarCount = freshResult.second
+                val fromDay = LocalDate.now().minusYears(1).toString()
+                val toDay = LocalDate.now().plusYears(2).toString()
+                val stateRef = db.collection("googleCalendarSync").document("dad")
+
+                stateRef.get()
+                    .addOnSuccessListener { stateSnap ->
+                        val previousRaw = stateSnap.get("items") as? Map<*, *> ?: emptyMap<Any, Any>()
+                        val previous = previousRaw.mapNotNull { (key, value) ->
+                            val id = key as? String ?: return@mapNotNull null
+                            val row = value as? Map<*, *> ?: return@mapNotNull null
+                            val day = row["day"] as? String ?: return@mapNotNull null
+                            val fingerprint = row["fingerprint"] as? String ?: ""
+                            id to (day to fingerprint)
+                        }.toMap()
+
+                        var added = 0
+                        var updated = 0
+                        var removed = 0
+                        var unchanged = 0
+                        val actions = mutableListOf<GoogleCalendarSyncAction>()
+                        val nextIndex = linkedMapOf<String, Map<String, String>>()
+
+                        fresh.forEach { (id, row) ->
+                            nextIndex[id] = mapOf("day" to row.day, "fingerprint" to row.fingerprint)
+                            val old = previous[id]
+                            when {
+                                old == null -> {
+                                    added++
+                                    actions += GoogleCalendarSyncAction(row.day, id, row.event)
+                                }
+                                old.first != row.day || old.second != row.fingerprint -> {
+                                    updated++
+                                    if (old.first != row.day) actions += GoogleCalendarSyncAction(old.first, id)
+                                    actions += GoogleCalendarSyncAction(row.day, id, row.event)
+                                }
+                                else -> unchanged++
+                            }
+                        }
+
+                        previous.forEach { (id, old) ->
+                            if (!fresh.containsKey(id)) {
+                                if (old.first >= fromDay && old.first <= toDay) {
+                                    removed++
+                                    actions += GoogleCalendarSyncAction(old.first, id)
+                                } else {
+                                    nextIndex[id] = mapOf("day" to old.first, "fingerprint" to old.second)
+                                }
+                            }
+                        }
+
+                        val deleteDays = actions.filter { it.value == null }.map { it.day }.distinct()
+                        val loadExistingAndCommit: (Set<String>) -> Unit = { existingDays ->
+                            commitGoogleCalendarActions(
+                                actions = actions,
+                                existingDeleteDays = existingDays,
+                                startIndex = 0,
+                                onSuccess = {
+                                    stateRef.set(
+                                        mapOf(
+                                            "items" to nextIndex,
+                                            "lastSyncedAt" to nowIso(),
+                                            "ownerEmail" to GOOGLE_CALENDAR_OWNER,
+                                            "keyword" to GOOGLE_CALENDAR_KEYWORD,
+                                            "allowedVisibility" to listOf("default", "public"),
+                                            "source" to "android-device-calendar",
+                                        )
+                                    ).addOnSuccessListener {
+                                        refreshWidgets()
+                                        done(
+                                            Result.success(
+                                                GoogleCalendarSyncResult(
+                                                    added = added,
+                                                    updated = updated,
+                                                    removed = removed,
+                                                    unchanged = unchanged,
+                                                    calendars = calendarCount,
+                                                )
+                                            )
+                                        )
+                                    }.addOnFailureListener { done(Result.failure(it)) }
+                                },
+                                onFailure = { done(Result.failure(it)) },
+                            )
+                        }
+
+                        if (deleteDays.isEmpty()) {
+                            loadExistingAndCommit(emptySet())
+                        } else {
+                            val reads = deleteDays.map { day ->
+                                db.collection("scheduleDays").document(day).get()
+                            }
+                            com.google.android.gms.tasks.Tasks.whenAllSuccess<DocumentSnapshot>(reads)
+                                .addOnSuccessListener { snapshots ->
+                                    loadExistingAndCommit(snapshots.filter { it.exists() }.map { it.id }.toSet())
+                                }
+                                .addOnFailureListener { done(Result.failure(it)) }
+                        }
+                    }
+                    .addOnFailureListener { done(Result.failure(it)) }
+            } catch (error: Exception) {
+                done(Result.failure(error))
+            }
+        }.start()
+    }
+
+    private fun readGoogleCalendarRows(context: Context): Pair<Map<String, GoogleCalendarSyncRow>, Int> {
+        val resolver = context.contentResolver
+        val calendarIds = mutableListOf<Long>()
+        val calendarProjection = arrayOf(
+            CalendarContract.Calendars._ID,
+            CalendarContract.Calendars.ACCOUNT_NAME,
+            CalendarContract.Calendars.ACCOUNT_TYPE,
+        )
+        resolver.query(
+            CalendarContract.Calendars.CONTENT_URI,
+            calendarProjection,
+            "${CalendarContract.Calendars.ACCOUNT_NAME} = ?",
+            arrayOf(GOOGLE_CALENDAR_OWNER),
+            null,
+        )?.use { cursor ->
+            val idIndex = cursor.getColumnIndexOrThrow(CalendarContract.Calendars._ID)
+            val typeIndex = cursor.getColumnIndexOrThrow(CalendarContract.Calendars.ACCOUNT_TYPE)
+            while (cursor.moveToNext()) {
+                val accountType = cursor.getString(typeIndex).orEmpty()
+                if (accountType == "com.google" || accountType.isBlank()) {
+                    calendarIds += cursor.getLong(idIndex)
+                }
+            }
+        }
+
+        if (calendarIds.isEmpty()) {
+            throw IllegalStateException(
+                "${GOOGLE_CALENDAR_OWNER} 계정의 캘린더를 휴대폰에서 찾지 못했습니다. 휴대폰 Google 계정과 캘린더 동기화를 확인해주세요."
+            )
+        }
+
+        val fromMillis = LocalDate.now().minusYears(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val toMillis = LocalDate.now().plusYears(2).plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val uriBuilder = CalendarContract.Instances.CONTENT_URI.buildUpon()
+        ContentUris.appendId(uriBuilder, fromMillis)
+        ContentUris.appendId(uriBuilder, toMillis)
+
+        val projection = arrayOf(
+            CalendarContract.Instances.EVENT_ID,
+            CalendarContract.Events.CALENDAR_ID,
+            CalendarContract.Instances.BEGIN,
+            CalendarContract.Instances.END,
+            CalendarContract.Events.ALL_DAY,
+            CalendarContract.Events.TITLE,
+            CalendarContract.Events.EVENT_LOCATION,
+            CalendarContract.Events.DESCRIPTION,
+            CalendarContract.Events.ACCESS_LEVEL,
+            CalendarContract.Events.STATUS,
+        )
+        val placeholders = calendarIds.joinToString(",") { "?" }
+        val selection = "${CalendarContract.Events.CALENDAR_ID} IN ($placeholders)"
+        val args = calendarIds.map(Long::toString).toTypedArray()
+        val fresh = linkedMapOf<String, GoogleCalendarSyncRow>()
+
+        resolver.query(
+            uriBuilder.build(),
+            projection,
+            selection,
+            args,
+            CalendarContract.Instances.BEGIN + " ASC",
+        )?.use { cursor ->
+            val eventIdIndex = cursor.getColumnIndexOrThrow(CalendarContract.Instances.EVENT_ID)
+            val calendarIdIndex = cursor.getColumnIndexOrThrow(CalendarContract.Events.CALENDAR_ID)
+            val beginIndex = cursor.getColumnIndexOrThrow(CalendarContract.Instances.BEGIN)
+            val endIndex = cursor.getColumnIndexOrThrow(CalendarContract.Instances.END)
+            val allDayIndex = cursor.getColumnIndexOrThrow(CalendarContract.Events.ALL_DAY)
+            val titleIndex = cursor.getColumnIndexOrThrow(CalendarContract.Events.TITLE)
+            val locationIndex = cursor.getColumnIndexOrThrow(CalendarContract.Events.EVENT_LOCATION)
+            val descriptionIndex = cursor.getColumnIndexOrThrow(CalendarContract.Events.DESCRIPTION)
+            val accessIndex = cursor.getColumnIndexOrThrow(CalendarContract.Events.ACCESS_LEVEL)
+            val statusIndex = cursor.getColumnIndexOrThrow(CalendarContract.Events.STATUS)
+
+            while (cursor.moveToNext()) {
+                val title = cursor.getString(titleIndex).orEmpty()
+                if (!title.contains(GOOGLE_CALENDAR_KEYWORD)) continue
+                if (!cursor.isNull(statusIndex) && cursor.getInt(statusIndex) == CalendarContract.Events.STATUS_CANCELED) continue
+
+                val access = if (cursor.isNull(accessIndex)) CalendarContract.Events.ACCESS_DEFAULT else cursor.getInt(accessIndex)
+                if (access != CalendarContract.Events.ACCESS_DEFAULT && access != CalendarContract.Events.ACCESS_PUBLIC) continue
+
+                val calendarId = cursor.getLong(calendarIdIndex)
+                val providerEventId = cursor.getLong(eventIdIndex)
+                val beginMillis = cursor.getLong(beginIndex)
+                val endMillis = cursor.getLong(endIndex)
+                val allDay = cursor.getInt(allDayIndex) != 0
+                val start = providerDateTime(beginMillis, allDay)
+                val end = endMillis.takeIf { it > 0L }?.let { providerDateTime(it, allDay) }
+                val importedId = "gcal_" + googleSyncDigest("$calendarId:$providerEventId:$beginMillis")
+
+                val event = FamilyEvent(
+                    id = importedId,
+                    title = title,
+                    start = start,
+                    end = end,
+                    allDay = allDay,
+                    memberIds = listOf("me"),
+                    kind = "event",
+                    repeat = "none",
+                    location = cursor.getString(locationIndex)?.takeIf { it.isNotBlank() },
+                    memo = cursor.getString(descriptionIndex)?.takeIf { it.isNotBlank() },
+                    googleImported = true,
+                    googleCalendarId = calendarId.toString(),
+                    googleEventId = "$providerEventId:$beginMillis",
+                    createdBy = auth.currentUser?.uid,
+                )
+                val fingerprint = googleSyncDigest(
+                    listOf(
+                        event.title,
+                        event.start,
+                        event.end.orEmpty(),
+                        event.allDay.toString(),
+                        event.location.orEmpty(),
+                        event.memo.orEmpty(),
+                        event.googleCalendarId.orEmpty(),
+                        event.googleEventId.orEmpty(),
+                    ).joinToString("\u001f")
+                )
+                fresh[importedId] = GoogleCalendarSyncRow(
+                    day = event.date,
+                    fingerprint = fingerprint,
+                    event = event,
+                )
+            }
+        }
+        return fresh to calendarIds.size
+    }
+
+    private fun providerDateTime(epochMillis: Long, allDay: Boolean): String {
+        val zone = if (allDay) ZoneOffset.UTC else ZoneId.systemDefault()
+        return Instant.ofEpochMilli(epochMillis)
+            .atZone(zone)
+            .toLocalDateTime()
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
+    }
+
+    private fun googleSyncDigest(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .take(20)
+            .joinToString("") { "%02x".format(it) }
+
+    private fun commitGoogleCalendarActions(
+        actions: List<GoogleCalendarSyncAction>,
+        existingDeleteDays: Set<String>,
+        startIndex: Int,
+        onSuccess: () -> Unit,
+        onFailure: (Exception) -> Unit,
+    ) {
+        if (startIndex >= actions.size) {
+            onSuccess()
+            return
+        }
+        val batch = db.batch()
+        actions.drop(startIndex).take(300).forEach { action ->
+            val ref = db.collection("scheduleDays").document(action.day)
+            val key = safeKey(action.id)
+            if (action.value != null) {
+                batch.set(
+                    ref,
+                    mapOf("date" to action.day, "events" to mapOf(key to action.value.toMap())),
+                    SetOptions.merge(),
+                )
+            } else if (action.day in existingDeleteDays) {
+                batch.update(ref, "events.$key", FieldValue.delete())
+            }
+        }
+        batch.commit()
+            .addOnSuccessListener {
+                commitGoogleCalendarActions(
+                    actions,
+                    existingDeleteDays,
+                    startIndex + 300,
+                    onSuccess,
+                    onFailure,
+                )
+            }
+            .addOnFailureListener { onFailure(it) }
     }
 
     fun close() { monthListener?.remove(); homeworkListener?.remove(); noticeListener?.remove(); approvalListener?.remove() }

@@ -55,6 +55,8 @@ fun SchedulerScreen(
     onNotice: () -> Unit,
     onStats: () -> Unit,
     onHomework: (LocalDate) -> Unit,
+    showGoogleSync: Boolean,
+    onGoogleSync: () -> Unit,
     approvalCount: Int,
     onApprovals: () -> Unit,
     onSettings: () -> Unit,
@@ -135,6 +137,8 @@ fun SchedulerScreen(
                         onNotice,
                         onStats,
                         { onHomework(selectedDate) },
+                        showGoogleSync,
+                        onGoogleSync,
                         approvalCount,
                         onApprovals,
                     ) { onAddEvent(selectedDate) }
@@ -268,6 +272,8 @@ private fun HorizontalActionBar(
     onNotice: () -> Unit,
     onStats: () -> Unit,
     onHomework: () -> Unit,
+    showGoogleSync: Boolean,
+    onGoogleSync: () -> Unit,
     approvalCount: Int,
     onApprovals: () -> Unit,
     onAdd: () -> Unit,
@@ -280,6 +286,7 @@ private fun HorizontalActionBar(
         SmallAction("📣 가족 메모", onNotice)
         SmallAction("📊 통계", onStats)
         SmallAction("📝 숙제 체크", onHomework)
+        if (showGoogleSync) SmallAction("↻ Google 동기화", onGoogleSync)
         if (approvalCount > 0) SmallAction("✅ 부모 확인 ($approvalCount)", onApprovals)
         Button(
             onClick = onAdd,

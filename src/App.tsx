@@ -1361,9 +1361,20 @@ export default function App() {
           >
             ＋ 일정 추가
           </button>
+          {currentMember === "me" && (
+            <button
+              className="add-btn"
+              disabled={googleSyncBusy}
+              onClick={() => void runGoogleSync()}
+              title="Google Calendar 공개 일정 중 제목에 가족이 포함된 일정 동기화"
+            >
+              {googleSyncBusy ? "동기화 중…" : "↻ Google 동기화"}
+            </button>
+          )}
           <button onClick={() => setSettingsOpen(true)}>⚙️</button>
         </div>
       </header>
+      {currentMember === "me" && googleSyncStatus && <div role="status" style={{padding:"6px 14px",fontSize:"13px"}}>{googleSyncStatus}</div>}
       <div className="toolbar">
         <div className="filters">
           <strong>가족</strong>

@@ -115,7 +115,7 @@ export async function syncGoogleFamilyCalendar(): Promise<SyncResult> {
       const end = e.end?.date ? `${e.end.date}T00:00` : e.end?.dateTime ? localTime(e.end.dateTime) : undefined;
       const id = "gcal_" + await digest(cal.id + ":" + e.id);
       const value: Record<string, unknown> = {
-        id, title: e.summary, start, allDay: !!e.start.date,
+        id, title: e.summary.replace(KEYWORD, "").trim(), start, allDay: !!e.start.date,
         memberIds: ["me"], kind: "event", repeat: "none", familyId: FAMILY_ID,
         googleImported: true, googleCalendarId: cal.id, googleEventId: e.id,
         createdBy: auth.currentUser.uid,

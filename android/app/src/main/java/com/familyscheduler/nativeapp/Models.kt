@@ -37,6 +37,9 @@ data class FamilyEvent(
     val lunarDay: Int? = null,
     val lunarLeapMonth: Boolean = false,
     val alarmMinutes: List<Int> = emptyList(),
+    val googleImported: Boolean = false,
+    val googleCalendarId: String? = null,
+    val googleEventId: String? = null,
     val createdBy: String? = null,
     val familyId: String = "family-main",
 ) {
@@ -68,6 +71,9 @@ data class FamilyEvent(
         lunarMonth?.let { put("lunarMonth", it) }; lunarDay?.let { put("lunarDay", it) }
         put("lunarLeapMonth", lunarLeapMonth)
         if (alarmMinutes.isNotEmpty()) put("alarmMinutes", alarmMinutes)
+        if (googleImported) put("googleImported", true)
+        googleCalendarId?.let { put("googleCalendarId", it) }
+        googleEventId?.let { put("googleEventId", it) }
         createdBy?.let { put("createdBy", it) }
         put("familyId", familyId)
     }
@@ -108,6 +114,9 @@ data class FamilyEvent(
                 lunarDay = (data["lunarDay"] as? Number)?.toInt(),
                 lunarLeapMonth = data["lunarLeapMonth"] as? Boolean ?: false,
                 alarmMinutes = (data["alarmMinutes"] as? List<*>)?.mapNotNull { (it as? Number)?.toInt() } ?: emptyList(),
+                googleImported = data["googleImported"] as? Boolean ?: false,
+                googleCalendarId = data["googleCalendarId"] as? String,
+                googleEventId = data["googleEventId"] as? String,
                 createdBy = data["createdBy"] as? String,
                 familyId = data["familyId"] as? String ?: "family-main",
             )

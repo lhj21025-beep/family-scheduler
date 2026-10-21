@@ -22,6 +22,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
+import { syncGoogleFamilyCalendar } from "./googleCalendarSync";
 import { listenForegroundPush, registerPushForMember } from "./fcm";
 
 type MemberId = "me" | "wife" | "son";
@@ -58,6 +59,9 @@ type EventItem = {
   alarmMinutes?: Alarm[];
   familyId?: string;
   createdBy?: string;
+  googleImported?: boolean;
+  googleCalendarId?: string;
+  googleEventId?: string;
 };
 type Homework = { id: string; name: string; familyId?: string };
 type Notice = {
@@ -253,6 +257,8 @@ export default function App() {
     [homeworkName, setHomeworkName] = useState(""),
     [editing, setEditing] = useState<Homework | null>(null),
     [modal, setModal] = useState<EventItem | null>(null);
+  const [googleSyncBusy, setGoogleSyncBusy] = useState(false);
+  const [googleSyncStatus, setGoogleSyncStatus] = useState("");
   const [homeworkRepeat, setHomeworkRepeat] = useState<Repeat>("daily");
   const [homeworkRepeatCount, setHomeworkRepeatCount] = useState(2);
   const [schoolHomeworkDetail, setSchoolHomeworkDetail] = useState("");
@@ -573,6 +579,7 @@ export default function App() {
     );
   };
   const saveEvent = async (e: EventItem) => {
+    if (e.googleImported) return alert("구글에서 가져온 일정은 Google Calendar에서 수정해주세요.");
     if (!e.title.trim()) return alert("일정 제목을 입력해주세요.");
     if (!e.memberIds.length) return alert("최소 한 명을 선택해주세요.");
     try {
@@ -623,6 +630,7 @@ export default function App() {
   const changeEvent = async (id: string, start: string, end?: string) => {
     const old = events.find((x) => x.id === id);
     if (!old) return;
+    if (old.googleImported) return alert("구글에서 가져온 일정은 Google Calendar에서 수정해주세요.");
     try {
       if (old.start.slice(0, 10) === start.slice(0, 10))
         await writeDayEvent({ ...old, start, end });
@@ -636,6 +644,7 @@ export default function App() {
     }
   };
   const deleteEvent = async (e: EventItem) => {
+    if (e.googleImported) return alert("구글에서 가져온 일정은 Google Calendar에서 삭제해주세요.");
     if (!confirm(`'${e.title}' 일정을 삭제할까요?`)) return;
     try {
       await removeDayEvent(e);
@@ -1151,6 +1160,18 @@ export default function App() {
     setMemoBody("");
     flash("가족 메모를 저장했습니다.");
   };
+  const runGoogleSync = async () => {
+    if (googleSyncBusy) return;
+    setGoogleSyncBusy(true);
+    setGoogleSyncStatus("Google Calendar 일정을 확인하고 있습니다.");
+    try {
+      const r = await syncGoogleFamilyCalendar();
+      setGoogleSyncStatus(`완료: 추가 ${r.added}건 · 수정 ${r.updated}건 · 삭제 ${r.removed}건 · 변경 없음 ${r.unchanged}건 (캘린더 ${r.calendars}개)`);
+    } catch (e) {
+      console.error("Google calendar sync failed", e);
+      setGoogleSyncStatus(`동기화 실패: ${e instanceof Error ? e.message : "알 수 없는 오류"}`);
+    } finally { setGoogleSyncBusy(false); }
+  };
   const requestNotifications = async () => {
     if (!("Notification" in window))
       return alert("이 브라우저는 알림을 지원하지 않습니다.");
@@ -1606,6 +1627,15 @@ export default function App() {
               <h2>⚙️ 알림 / 앱 설정</h2>
               <button onClick={() => setSettingsOpen(false)}>×</button>
             </div>
+            {currentMember === "me" && <section className="setting-note" aria-label="Google Calendar 동기화">
+              <h3>Google Calendar 수동 동기화</h3>
+              <p>연결 계정: lhj21025@gmail.com</p>
+              <p>모든 캘린더 중 제목에 <b>가족</b>이 포함되고 공개로 지정된 일정만 가져옵니다. 구글 일정은 읽기 전용입니다.</p>
+              <div className="setting-actions">
+                <button className="save-btn" disabled={googleSyncBusy} onClick={() => void runGoogleSync()}>{googleSyncBusy ? "동기화 중…" : "Google 일정 동기화"}</button>
+              </div>
+              {googleSyncStatus && <p role="status">{googleSyncStatus}</p>}
+            </section>}
             <p className="setting-note">
               일정의 알림 대상은 <b>일정 등록 화면에서 선택한 가족 구성원</b>
               으로 저장됩니다. 현재 로그인한 구성원의 기기에서 브라우저 알림을

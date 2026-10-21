@@ -46,4 +46,4 @@ npm run build
 
 ## Google Calendar 수동 동기화
 
-아빠 계정에서 상단의 Google 동기화 버튼으로 실행합니다. Google Cloud OAuth 웹 클라이언트 ID를 GitHub Actions 저장소 Secret `GOOGLE_CALENDAR_CLIENT_ID`로 설정하고 Firestore 규칙을 게시해야 동작합니다. Google Calendar의 공개(`public`) 일정 중 제목에 `가족`이 포함된 일정만 읽습니다.
+아빠 계정에서 상단의 Google 동기화 버튼으로 실행합니다. Google Cloud OAuth 웹 클라이언트 ID를 GitHub Actions 저장소 Secret `GOOGLE_CALENDAR_CLIENT_ID`로 설정하고 Firestore 규칙을 게시해야 동작합니다. Google Calendar에서 기본 공개(`default`, 미지정 포함) 또는 전체 공개(`public`) 상태이고 제목에 `[가족]`이 포함된 일정만 읽습니다. 비공개(`private`) 일정은 제외합니다.

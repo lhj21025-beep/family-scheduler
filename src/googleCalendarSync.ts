@@ -4,7 +4,7 @@ import { deleteField, doc, FieldPath, getDoc, writeBatch } from "firebase/firest
 const OWNER_EMAIL = "lhj21025@gmail.com";
 const FAMILY_ID = "family-main";
 const STATE_REF = () => doc(db, "googleCalendarSync", "dad");
-const KEYWORD = "가족";
+const KEYWORD = "[가족]";
 const GOOGLE_SCOPE = "openid email https://www.googleapis.com/auth/calendar.readonly";
 type GoogleEvent = {
   id: string; status?: string; summary?: string; visibility?: string;
@@ -93,7 +93,7 @@ export async function syncGoogleFamilyCalendar(): Promise<SyncResult> {
   if (identity.email?.toLowerCase() !== OWNER_EMAIL)
     throw new Error(`${OWNER_EMAIL} 계정으로 Google 접근을 승인해주세요.`);
 
-  // Explicitly public events only. 'default' is not treated as public.
+  // Include default visibility (including omitted field) and public; exclude private.
   const from = new Date(); from.setFullYear(from.getFullYear() - 1);
   const to = new Date(); to.setFullYear(to.getFullYear() + 2);
   const min = from.toISOString(), max = to.toISOString();
@@ -110,7 +110,7 @@ export async function syncGoogleFamilyCalendar(): Promise<SyncResult> {
       `calendars/${encodeURIComponent(cal.id)}/events?${params.toString()}`, accessToken, "items",
     );
     for (const e of items) {
-      if (e.status === "cancelled" || e.visibility !== "public" || !e.summary?.includes(KEYWORD) || !e.start) continue;
+      if (e.status === "cancelled" || e.visibility === "private" || !e.summary?.includes(KEYWORD) || !e.start) continue;
       const start = e.start.date ? `${e.start.date}T00:00` : localTime(e.start.dateTime!);
       const end = e.end?.date ? `${e.end.date}T00:00` : e.end?.dateTime ? localTime(e.end.dateTime) : undefined;
       const id = "gcal_" + await digest(cal.id + ":" + e.id);
@@ -167,7 +167,7 @@ export async function syncGoogleFamilyCalendar(): Promise<SyncResult> {
   }
   await import("firebase/firestore").then(({setDoc}) => setDoc(STATE_REF(), {
     items: nextIndex, lastSyncedAt: new Date().toISOString(),
-    ownerEmail: OWNER_EMAIL, keyword: KEYWORD, publicOnly: true,
+    ownerEmail: OWNER_EMAIL, keyword: KEYWORD, allowedVisibility: ["default", "public"],
   }));
   return result;
 }

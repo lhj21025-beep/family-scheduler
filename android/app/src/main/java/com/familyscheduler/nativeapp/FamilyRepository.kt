@@ -830,8 +830,9 @@ class FamilyRepository {
             val statusIndex = cursor.getColumnIndexOrThrow(CalendarContract.Events.STATUS)
 
             while (cursor.moveToNext()) {
-                val title = cursor.getString(titleIndex).orEmpty()
-                if (!title.contains(GOOGLE_CALENDAR_KEYWORD)) continue
+                val rawTitle = cursor.getString(titleIndex).orEmpty()
+                if (!rawTitle.contains(GOOGLE_CALENDAR_KEYWORD)) continue
+                val title = rawTitle.replace(GOOGLE_CALENDAR_KEYWORD, "").trim()
                 if (!cursor.isNull(statusIndex) && cursor.getInt(statusIndex) == CalendarContract.Events.STATUS_CANCELED) continue
 
                 val access = if (cursor.isNull(accessIndex)) CalendarContract.Events.ACCESS_DEFAULT else cursor.getInt(accessIndex)

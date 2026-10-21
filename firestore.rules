@@ -20,6 +20,12 @@ service cloud.firestore {
       allow read, write: if signedInFamily() && familyId == 'family-main';
     }
 
+    match /googleCalendarSync/{syncId} {
+      allow read, write: if request.auth != null
+        && request.auth.token.email == 'dad@family-scheduler.app'
+        && syncId == 'dad';
+    }
+
     // Legacy collections remain readable/writable for the one-time migration.
     match /events/{eventId} {
       allow read, write: if signedInFamily();

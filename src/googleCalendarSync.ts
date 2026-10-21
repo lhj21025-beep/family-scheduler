@@ -5,7 +5,7 @@ const OWNER_EMAIL = "lhj21025@gmail.com";
 const FAMILY_ID = "family-main";
 const STATE_REF = () => doc(db, "googleCalendarSync", "dad");
 const KEYWORD = "가족";
-const GOOGLE_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const GOOGLE_SCOPE = "openid email https://www.googleapis.com/auth/calendar.readonly";
 type GoogleEvent = {
   id: string; status?: string; summary?: string; visibility?: string;
   start?: { date?: string; dateTime?: string };

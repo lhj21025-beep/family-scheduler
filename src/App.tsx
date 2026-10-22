@@ -22,6 +22,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
+import SpellingQuiz from "./SpellingQuiz";
 import { syncGoogleFamilyCalendar } from "./googleCalendarSync";
 import { listenForegroundPush, registerPushForMember } from "./fcm";
 
@@ -259,6 +260,7 @@ export default function App() {
     [modal, setModal] = useState<EventItem | null>(null);
   const [googleSyncBusy, setGoogleSyncBusy] = useState(false);
   const [googleSyncStatus, setGoogleSyncStatus] = useState("");
+  const [spellingOpen, setSpellingOpen] = useState(false);
   const [homeworkRepeat, setHomeworkRepeat] = useState<Repeat>("daily");
   const [homeworkRepeatCount, setHomeworkRepeatCount] = useState(2);
   const [schoolHomeworkDetail, setSchoolHomeworkDetail] = useState("");
@@ -1705,6 +1707,9 @@ export default function App() {
         </div>
       )}
       {notice && <div className="toast">✓ {notice}</div>}
+      {spellingOpen && currentMember && (
+        <SpellingQuiz member={currentMember} close={() => setSpellingOpen(false)} />
+      )}
       {homeworkOpen && (
         <div
           className="modal-backdrop"
@@ -1715,6 +1720,9 @@ export default function App() {
               <h2>📝 숙제 체크</h2>
               <button onClick={() => setHomeworkOpen(false)}>×</button>
             </div>
+            <button type="button" className="spelling-entry" onClick={() => { setHomeworkOpen(false); setSpellingOpen(true); }}>
+              맞춤법 시험 · 하루 3문제 · 가족 순위 보기
+            </button>
             <div className="form-grid">
               <label>
                 시작일

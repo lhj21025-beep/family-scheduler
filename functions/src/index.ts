@@ -337,7 +337,9 @@ function normalizeSpellingAnswer(value: string) {
 
 // Called daily at 00:10 KST. Does not overwrite a quiz another device has
 // already created. A single common set of questions is shared with all users.
-export const generateDailySpellingQuiz = onSchedule(
+// Disabled until Secret Manager API + OPENAI_API_KEY are configured.
+// Re-export this function to activate its Firebase deployment.
+const generateDailySpellingQuiz = onSchedule(
   {
     schedule: '10 0 * * *',
     timeZone: 'Asia/Seoul',
@@ -468,3 +470,6 @@ export const generateDailySpellingQuiz = onSchedule(
     }
   },
 )
+
+// Keeps the implementation type-checked while deployment is disabled.
+void generateDailySpellingQuiz

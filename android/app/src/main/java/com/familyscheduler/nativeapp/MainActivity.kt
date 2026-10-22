@@ -1199,6 +1199,11 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(8), dp(6), 0, dp(10))
         })
 
+        box.addView(MaterialButton(this).apply {
+            text = "맞춤법 숙제 · 오늘 3문제 풀기 / 가족 순위"
+            setOnClickListener { SpellingQuizDialog(this@MainActivity, repo.signedMember()).show() }
+        }, matchWrap(bottom = 10))
+
         notices.firstOrNull()?.let { notice ->
             box.addView(TextView(this).apply {
                 text = "📣 최근 가족 메모"

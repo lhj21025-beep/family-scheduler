@@ -1,0 +1,34 @@
+name: Validate spelling feature
+on:
+  push:
+    branches: [feature/daily-spelling-quiz]
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'functions/**'
+      - 'package.json'
+      - 'package-lock.json'
+permissions:
+  contents: read
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+  functions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: functions
+      - run: npm run build
+        working-directory: functions

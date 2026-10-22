@@ -138,5 +138,10 @@ export const fallbackQuiz = (date: string, history: DailySpellingQuiz[]): DailyS
     if (!q) break;
     pick.push(q);
   }
-  return { date, grade, source: "curated", questions: pick.slice(0, 3), submissions: {} };
+  const questions = pick.slice(0, 3).map(q =>
+    q.kind === "choice" && q.options && hashCode(date + q.id + "options") % 2 === 0
+      ? { ...q, options: q.options.slice().reverse() }
+      : q
+  );
+  return { date, grade, source: "curated", questions, submissions: {} };
 };

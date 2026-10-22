@@ -1515,6 +1515,9 @@ export default function App() {
                 : "없음"}
             </span>
           </div>
+          <button type="button" className="spelling-entry" onClick={() => { setTodayOpen(false); setSpellingOpen(true); }}>
+            맞춤법 숙제 · 오늘 3문제 풀기 / 가족 순위
+          </button>
           {notices[0] && (
             <div className="mini-notice">
               <b>📣 최근 가족 메모</b>

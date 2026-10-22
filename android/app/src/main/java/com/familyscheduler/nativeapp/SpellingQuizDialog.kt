@@ -131,7 +131,11 @@ class SpellingQuizDialog(private val activity: Activity, private val member: Str
             if (review != null && selected.size == 3) selected[2] = review
             val payload = mapOf(
                 "date" to dayId, "grade" to grade(), "source" to "curated",
-                "questions" to selected.map { it.toMap() }, "submissions" to emptyMap<String, Any>(),
+                "questions" to selected.map { item ->
+                    if (item.kind == "choice" && (dayId + item.id).hashCode() % 2 == 0)
+                        item.copy(options = item.options.reversed()).toMap()
+                    else item.toMap()
+                }, "submissions" to emptyMap<String, Any>(),
             )
             db.runTransaction { tx ->
                 val existing = tx.get(doc)

@@ -815,6 +815,10 @@ class MainActivity : ComponentActivity() {
 
     private fun showHomeworkDialog() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20)) }
+        box.addView(MaterialButton(this).apply {
+            text = "맞춤법 시험 · 하루 3문제 · 가족 순위"
+            setOnClickListener { SpellingQuizDialog(this@MainActivity, repo.signedMember()).show() }
+        }, matchWrap(bottom = 12))
         val start = edit("시작일", selectedDate.toString(), false).apply { setOnClickListener { pickDate(this) } }
         val end = edit("종료일", selectedDate.toString(), false).apply { setOnClickListener { pickDate(this) } }
         val dateRow = LinearLayout(this)

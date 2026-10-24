@@ -584,9 +584,11 @@ class FamilyRepository {
         val dates = (datesBetween(start, end) + LocalDate.parse(event.date)).distinct()
         val refs = dates.map { db.collection("scheduleDays").document(it.toString()) }
         db.runTransaction { transaction ->
+            // Firestore requires every transaction read to finish before the first write.
+            val snapshots = refs.map { transaction.get(it) }
             var changed = 0
-            refs.forEach { ref ->
-                val snapshot = transaction.get(ref)
+            snapshots.forEachIndexed { index, snapshot ->
+                val ref = refs[index]
                 val current = parseEvents(snapshot)
                 current.filter { candidate ->
                     candidate.kind == "homework" && candidate.homeworkId == event.homeworkId &&

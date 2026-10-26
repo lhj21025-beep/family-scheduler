@@ -144,7 +144,7 @@ export default function SpellingQuiz({
                       <b>{i + 1}번</b>
                       <span>객관식</span>
                     </div>
-                    <p>{spellingChoicePrompt(q)}</p>
+                    <p><span className="spelling-context-help">빈칸에 들어갈 알맞은 단어를 고르세요.</span>{spellingChoicePrompt(q)}</p>
                     <div className="spelling-options">
                       {spellingChoices(q).map(option => (
                         <label className={chosen === option ? "selected" : ""} key={option}>

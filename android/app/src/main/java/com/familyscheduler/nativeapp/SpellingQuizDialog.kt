@@ -75,6 +75,42 @@ class SpellingQuizDialog(
         Item("n6-08",6,"write","‘눈꼽이 끼었다.’에서 틀린 낱말을 바로 쓰세요.",emptyList(),"눈곱","‘눈곱’이 맞아요.")
     )
 
+    // AI exams are already multiple choice. Earlier writing questions are
+    // shown as two-choice questions without changing their saved answer/score.
+    private fun optionsFor(question: Item): List<String> {
+        if (question.options.size == 2 && question.answer in question.options) return question.options
+        val known = bank.firstOrNull {
+            it.kind == "choice" && it.answer == question.answer && it.options.size == 2
+        }?.options?.firstOrNull { it != question.answer }
+        val typo = mapOf(
+            "웬일" to "왠일", "며칠" to "몇일", "돼" to "되",
+            "떡볶이" to "떡복이", "베개" to "배게", "설거지" to "설겆이",
+            "오랜만에" to "오랫만에", "금세" to "금새",
+            "어이없다" to "어의없다", "낫다" to "낮다", "함께" to "함깨",
+            "안" to "않", "할게" to "할께", "갈게" to "갈께",
+            "뵙겠습니다" to "봽겠습니다", "문득" to "문뜩",
+            "깨끗이" to "깨끗히", "가리켰다" to "가르켰다",
+            "가르쳤다" to "가르쳣다", "부딪쳐" to "부딫쳐",
+            "잊어버려서" to "잊어버려써", "안팎" to "않팎",
+            "대가" to "댓가", "곰곰이" to "곰곰히",
+            "눈곱" to "눈꼽", "무릅쓰고" to "무릎쓰고",
+            "훗날" to "후날", "뒤처지지" to "뒤쳐지지",
+            "닦달했다" to "닥달했다"
+        )[question.answer]
+        val wrong = known ?: typo ?: return emptyList()
+        return if (question.id.hashCode() % 2 == 0) listOf(wrong, question.answer)
+               else listOf(question.answer, wrong)
+    }
+
+    private fun choicePrompt(question: Item): String =
+        if (question.kind == "write")
+            question.prompt
+                .replace("틀린 낱말을 바르게 고쳐 쓰세요", "바른 낱말을 고르세요")
+                .replace("틀린 낱말을 고쳐 쓰세요", "바른 낱말을 고르세요")
+                .replace("틀린 낱말을 바로 쓰세요", "바른 낱말을 고르세요")
+                .replace("틀린 맞춤법을 바르게 고쳐 쓰세요", "바른 표기를 고르세요")
+        else question.prompt
+
     private fun grade() = (4 + today.year - 2026 - if (today.monthValue < 3) 1 else 0).coerceIn(1, 6)
     private fun text(value: String, size: Float = 15f, bold: Boolean = false): TextView =
         TextView(activity).apply {
@@ -129,11 +165,17 @@ class SpellingQuizDialog(
             }
             val sorted = bank.filter { it.grade == grade() }
                 .sortedBy { (dayId + it.id).hashCode().toUInt().toLong() }
-            val selected = sorted.filter { it.kind == "choice" }.take(2).toMutableList()
-            val writing = sorted.firstOrNull { it.kind == "write" }
-            if (writing != null) selected.add(writing)
-            val review = reviewed.firstOrNull { r -> selected.none { it.id == r.id } }
-            if (review != null && selected.size == 3) selected[2] = review
+            val selected = sorted.filter { it.kind == "choice" }.take(3).toMutableList()
+            val review = reviewed.firstOrNull { r ->
+                selected.none { it.id == r.id } && optionsFor(r).size == 2
+            }
+            if (review != null && selected.size == 3) {
+                selected[2] = review.copy(
+                    kind = "choice",
+                    prompt = choicePrompt(review),
+                    options = optionsFor(review),
+                )
+            }
             val payload = mapOf(
                 "date" to dayId, "grade" to grade(), "source" to "curated",
                 "questions" to selected.map { item ->
@@ -180,35 +222,24 @@ class SpellingQuizDialog(
             box.addView(text("오늘 완료 · " + (mine["score"] ?: 0).toString() + "/3점", 17f, true))
         }
         questions.forEachIndexed { index, item ->
-            box.addView(text((index + 1).toString() + "번 · " + item.prompt, 16f, true))
+            box.addView(text((index + 1).toString() + "번 · " + choicePrompt(item), 16f, true))
             val previous = oldAnswers?.getOrNull(index).orEmpty()
-            if (item.kind == "choice") {
-                val group = RadioGroup(activity)
-                item.options.forEach { option ->
-                    group.addView(RadioButton(activity).apply {
-                        text = option
-                        setPadding(16, 7, 8, 7)
-                        isChecked = if (mine != null) previous == option else false
-                        isEnabled = mine == null
-                        setOnClickListener { picks[index] = option }
-                    })
-                }
-                box.addView(group)
-            } else {
-                box.addView(EditText(activity).apply {
-                    hint = "바른 낱말을 입력하세요"
-                    setText(previous)
+            val choices = optionsFor(item)
+            if (choices.size != 2) {
+                showError("이전 문제의 보기 정보를 복구하지 못했습니다.")
+                return
+            }
+            val group = RadioGroup(activity)
+            choices.forEach { option ->
+                group.addView(RadioButton(activity).apply {
+                    text = option
+                    setPadding(16, 7, 8, 7)
+                    isChecked = previous == option
                     isEnabled = mine == null
-                    setSingleLine()
-                    addTextChangedListener(object : android.text.TextWatcher {
-                        override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
-                        override fun onTextChanged(s: CharSequence?, st: Int, before: Int, count: Int) {
-                            picks[index] = s?.toString().orEmpty()
-                        }
-                        override fun afterTextChanged(s: android.text.Editable?) {}
-                    })
+                    setOnClickListener { picks[index] = option }
                 })
             }
+            box.addView(group)
             if (mine != null) {
                 val success = correct(previous, item.answer)
                 box.addView(text((if (success) "정답" else "오답") + " · " + item.answer + "\n" + item.explanation, 13f))

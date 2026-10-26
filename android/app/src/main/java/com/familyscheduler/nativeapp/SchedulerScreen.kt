@@ -19,6 +19,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -55,6 +57,7 @@ fun SchedulerScreen(
     onNotice: () -> Unit,
     onStats: () -> Unit,
     onHomework: (LocalDate) -> Unit,
+    onSpellingQuiz: () -> Unit,
     showGoogleSync: Boolean,
     onGoogleSync: () -> Unit,
     approvalCount: Int,
@@ -120,6 +123,12 @@ fun SchedulerScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        TextButton(
+                            onClick = onSpellingQuiz,
+                            contentPadding = PaddingValues(0.dp),
+                            modifier = Modifier.size(38.dp)
+                                .semantics { contentDescription = "맞춤법 시험" },
+                        ) { Text("🔤", fontSize = 20.sp) }
                         TextButton(
                             onClick = { searchDialogOpen = true },
                             contentPadding = PaddingValues(0.dp),

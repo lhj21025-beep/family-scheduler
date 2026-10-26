@@ -16,7 +16,11 @@ import java.time.temporal.TemporalAdjusters
 
 // Entirely native Android screen. Uses the identical scheduleDays/{KST date}
 // spellingQuiz document and member IDs as the web scheduler.
-class SpellingQuizDialog(private val activity: Activity, private val member: String) {
+class SpellingQuizDialog(
+    private val activity: Activity,
+    private val member: String,
+    private val onClosed: () -> Unit = {},
+) {
     private val db = FirebaseFirestore.getInstance()
     private val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
     private val dayId = today.toString()
@@ -89,6 +93,7 @@ class SpellingQuizDialog(private val activity: Activity, private val member: Str
         dialog = AlertDialog.Builder(activity).setTitle("맞춤법 시험 · 하루 3문제")
             .setView(ScrollView(activity).apply { addView(box) })
             .setNegativeButton("닫기", null).create()
+        dialog.setOnDismissListener { onClosed() }
         dialog.show()
         dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         load()
@@ -164,7 +169,13 @@ class SpellingQuizDialog(private val activity: Activity, private val member: Str
         val mine = submissions[member] as? Map<*, *>
         val oldAnswers = (mine?.get("answers") as? List<*>)?.map { it as? String ?: "" }
         val picks = MutableList(3) { "" }
-        box.addView(text(dayId + " · 초등 " + (quiz["grade"] ?: grade()).toString() + "학년", 14f))
+        val sourceDescription = if (quiz["source"] == "ai") {
+            "Gemini AI 자동 출제"
+        } else {
+            "검증된 맞춤법 문제은행 · AI 미생성 시 자동 대체"
+        }
+        box.addView(text(dayId + " · 초등 " + (quiz["grade"] ?: grade()).toString() +
+            "학년\n" + sourceDescription + " · 가족 공통 3문제", 14f))
         if (mine != null) {
             box.addView(text("오늘 완료 · " + (mine["score"] ?: 0).toString() + "/3점", 17f, true))
         }
@@ -216,7 +227,7 @@ class SpellingQuizDialog(private val activity: Activity, private val member: Str
                 }
             })
         } else {
-            box.addView(text("하루 1회 응시 · 가족에게는 점수만 공개됩니다.", 12f))
+            box.addView(text("하루 1회 응시 · 가족에게는 점수와 순위만 공개됩니다.\n틀린 문제는 3일·7일·14일 후 복습에 활용됩니다.", 12f))
         }
         box.addView(text("가족 주간·월간 순위", 17f, true))
         val toggles = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
@@ -228,6 +239,10 @@ class SpellingQuizDialog(private val activity: Activity, private val member: Str
             })
         }
         box.addView(toggles); box.addView(ranks)
+        box.addView(Button(activity).apply {
+            text = "점수 순위 새로고침"
+            setOnClickListener { loadRanking("주간", ranks) }
+        })
         loadRanking("주간", ranks)
     }
 

@@ -149,11 +149,22 @@ export const generateDailySpellingQuiz = onSchedule({
         Array.isArray(s?.answers) && canonical(s.answers[i]||'')!==canonical(question.answer)))
     if (review) break
   }
+  // Historical free-text errors are reviewed using selectable spellings.
+  if (review?.kind === 'write' || (review && (!review.options || review.options.length !== 2))) {
+    const pair=VERIFIED.find(x=>x.right===review?.answer || review?.id.startsWith(x.id+':'))
+    review=pair ? {
+      ...review, kind:'choice',
+      prompt:review.prompt
+        .replace(/틀린 낱말을 (?:바르게 고쳐 쓰세요|고쳐 쓰세요|바로 쓰세요)/g,'바른 낱말을 고르세요')
+        .replace(/틀린 맞춤법을 바르게 고쳐 쓰세요/g,'바른 표기를 고르세요'),
+      options:stableHash(tomorrow+review.id)%2 ? [pair.right,pair.wrong] : [pair.wrong,pair.right],
+    } : undefined
+  }
   const wanted=review?2:QUESTION_LIMIT
   const selections=fresh.slice(0,wanted)
-  const tasks=selections.map((item,i)=>({
+  const tasks=selections.map((item)=>({
     id:item.id, right:item.right, wrong:item.wrong,
-    kind: (i===2 || (review && i===1))?'write':'choice',
+    kind:'choice' as const,
     explanation:item.explanation,
   }))
   let generated:SpellingQuestion[]=[]
@@ -169,8 +180,7 @@ export const generateDailySpellingQuiz = onSchedule({
             systemInstruction:{parts:[{text:
               '당신은 한국 초등학교 국어 맞춤법 교사입니다. 주어진 정답/오답 단어쌍을 절대 바꾸지 말고 문제의 문맥만 자연스럽게 만드세요. '+
               '반드시 각 항목에 정확한 id, prompt를 넣으세요. '+
-              'kind가 choice인 경우 정답을 노출하지 않는 짧은 빈칸 문장을 만드세요. '+
-              'kind가 write인 경우 오답 표기가 포함된 짧은 문장을 제시하고 틀린 낱말을 바로 고쳐 쓰라고 물으세요. '+
+              '모든 문제는 객관식 2지선다입니다. 문맥에 맞는 표기를 고르도록 짧은 빈칸 문장을 만드세요. '+
               '다른 의미도 되는 모호한 문맥을 만들지 마세요. '+
               '설명은 넣지 말고 JSON 객체 {"questions":[{"id":"...","prompt":"..."}]}만 출력하세요.'
             }]},
@@ -195,9 +205,8 @@ export const generateDailySpellingQuiz = onSchedule({
         const item=obj.questions?.find(q=>q.id===task.id)
         const prompt=item?.prompt?.trim()||''
         if (!prompt || prompt.length>200 || pastPrompts.includes(prompt)) throw new Error('Malformed quiz prompt')
-        if (task.kind==='write' && !prompt.includes(task.wrong)) throw new Error('Writing question lacks misspelling')
         const answerSource=selections[i]
-        return build(answerSource,grade,task.kind as 'choice'|'write',prompt)
+        return build(answerSource,grade,'choice',prompt)
       })
       generated=constructed
       source='ai'
@@ -209,7 +218,7 @@ export const generateDailySpellingQuiz = onSchedule({
   } else {
     logger.warn('GEMINI_API_KEY empty; using verified spelling prompts')
   }
-  if (!generated.length) generated=tasks.map((task,i)=>build(selections[i],grade,task.kind as 'choice'|'write'))
+  if (!generated.length) generated=tasks.map((_,i)=>build(selections[i],grade,'choice'))
   const questions=review?[...generated,review]:generated
   if (questions.length!==QUESTION_LIMIT) throw new Error('Expected exactly 3 spelling questions')
   await db.runTransaction(async tx=>{

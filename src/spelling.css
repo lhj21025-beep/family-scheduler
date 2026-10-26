@@ -25,3 +25,6 @@
 .spelling-hint{color:#667085;font-size:12px;line-height:1.5}
 .spelling-entry{display:block;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:10px;padding:13px 16px;font-weight:700;cursor:pointer;text-align:left;width:100%;margin:9px 0 14px}
 @media(max-width:480px){.spelling-panel{padding:14px;max-height:96vh}.spelling-overlay{padding:6px}.spelling-rank-row{gap:6px}.spelling-question{padding:12px}}
+
+/* Compact, icon-only entry in the existing schedule toolbar. */
+.top-actions .spelling-top-icon { min-width: 38px; width: 38px; flex: 0 0 38px; padding: 5px; font-size: 19px; line-height: 1.1; text-align: center; }

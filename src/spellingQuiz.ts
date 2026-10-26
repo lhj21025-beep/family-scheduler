@@ -107,10 +107,44 @@ const hashCode = (s: string): number => {
   return h >>> 0;
 };
 
+
+// Legacy writing questions are displayed as multiple choice without changing
+// the shared stored answer or historical scores.
+export const spellingChoices = (question: SpellingQuestion): string[] => {
+  if (question.options?.length === 2 && question.options.includes(question.answer))
+    return question.options;
+  const pair = spellingBank.find(q => q.kind === "choice" &&
+    q.answer === question.answer && q.options?.some(v => v !== question.answer));
+  const wrongByAnswer: Record<string, string> = {
+    "웬일": "왠일", "며칠": "몇일", "돼": "되", "떡볶이": "떡복이",
+    "오랜만에": "오랫만에", "베개": "배게", "깨끗이": "깨끗히",
+    "문득": "문뜩", "갈게": "갈께", "뵙겠습니다": "봽겠습니다",
+    "곰곰이": "곰곰히", "대가": "댓가", "눈곱": "눈꼽",
+    "무릅쓰고": "무릎쓰고", "뒤처지지": "뒤쳐지지",
+    "부딪쳐": "부딫쳐", "가르쳤다": "가리켰다",
+    "할게": "할께", "가리켰다": "가르켰다",
+    "어이없다": "어의없다", "낫다": "낮다", "함께": "함깨",
+    "안": "않", "금세": "금새", "설거지": "설겆이",
+    "안팎": "않팎", "훗날": "후날", "닦달했다": "닥달했다",
+    "잊어버려서": "잊어버려써",
+  };
+  const wrong = pair?.options?.find(v => v !== question.answer) ??
+    wrongByAnswer[question.answer];
+  if (!wrong) return [];
+  return hashCode(question.id) % 2
+    ? [question.answer, wrong] : [wrong, question.answer];
+};
+
+export const spellingChoicePrompt = (question: SpellingQuestion): string =>
+  question.kind === "write"
+    ? question.prompt.replace(/틀린 낱말을 (?:바르게 고쳐 쓰세요|고쳐 쓰세요|바로 쓰세요)/g, "바른 낱말을 고르세요")
+      .replace(/틀린 맞춤법을 바르게 고쳐 쓰세요/g, "바른 표기를 고르세요")
+    : question.prompt;
+
 export const fallbackQuiz = (date: string, history: DailySpellingQuiz[]): DailySpellingQuiz => {
   const grade = spellingGrade(date);
   const previous = history.filter(q => q.date < date);
-  const eligible = spellingBank.filter(q => q.grade === grade);
+  const eligible = spellingBank.filter(q => q.grade === grade && q.kind === "choice");
   const used = new Set(previous.flatMap(q => q.questions.map(p => p.id)));
   const ordered = eligible.slice().sort((a, b) => hashCode(date + a.id) - hashCode(date + b.id));
   const fresh = ordered.filter(q => !used.has(q.id)).concat(ordered.filter(q => used.has(q.id)));
@@ -119,29 +153,15 @@ export const fallbackQuiz = (date: string, history: DailySpellingQuiz[]): DailyS
     .flatMap(q => q.questions.filter((item, i) =>
       Object.values(q.submissions ?? {}).some(s => s && !isCorrect(s.answers?.[i] ?? "", item.answer))
     ))
+    .filter(q => spellingChoices(q).length === 2)
     .sort((a, b) => hashCode(date + a.id) - hashCode(date + b.id));
   const review = overdue[0];
-  const pick: SpellingQuestion[] = [];
-  for (const q of fresh) {
-    if (pick.length === (review ? 2 : 3)) break;
-    if (q.kind === "choice" && pick.filter(v => v.kind === "choice").length >= (review?.kind === "write" ? 2 : 2)) continue;
-    if (!pick.some(v => v.id === q.id) && q.id !== review?.id) pick.push(q);
-  }
-  // At least one direct-writing question every day, unless the review already supplies one.
-  if (!pick.some(q => q.kind === "write") && review?.kind !== "write") {
-    const w = fresh.find(q => q.kind === "write" && q.id !== review?.id);
-    if (w) pick[pick.length - 1] = w;
-  }
-  if (review) pick.push(review);
-  while (pick.length < 3) {
-    const q = fresh.find(p => !pick.some(x => x.id === p.id));
-    if (!q) break;
-    pick.push(q);
-  }
+  const pick = fresh.filter(q => q.id !== review?.id).slice(0, review ? 2 : 3);
+  if (review) pick.push({ ...review, kind: "choice", options: spellingChoices(review),
+    prompt: spellingChoicePrompt(review) });
   const questions = pick.slice(0, 3).map(q =>
     q.kind === "choice" && q.options && hashCode(date + q.id + "options") % 2 === 0
-      ? { ...q, options: q.options.slice().reverse() }
-      : q
+      ? { ...q, options: q.options.slice().reverse() } : q
   );
   return { date, grade, source: "curated", questions, submissions: {} };
 };

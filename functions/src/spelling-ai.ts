@@ -57,6 +57,7 @@ const VERIFIED: VerifiedPair[] = [
   { id:'g4-quick',grade:4,right:'금세',wrong:'금새',explanation:'‘금세’는 ‘금시에’가 줄어든 말이에요.' },
   { id:'g4-wow',grade:4,right:'어이없다',wrong:'어의없다',explanation:'황당할 때는 ‘어이없다’라고 써요.' },
   { id:'g4-low',grade:4,right:'낫다',wrong:'낮다',explanation:'병이 좋아지는 것은 ‘낫다’예요.' },
+  { id:'g4-score',grade:4,right:'낮다',wrong:'낫다',explanation:'점수가 높지 않다는 뜻은 ‘낮다’예요.' },
   { id:'g4-together',grade:4,right:'함께',wrong:'함깨',explanation:'다 같이 한다는 뜻의 말은 ‘함께’예요.' },
   { id:'g4-not',grade:4,right:'안',wrong:'않',explanation:'‘안’은 부정을 나타내는 부사예요.' },
   { id:'g5-telephone',grade:5,right:'할게',wrong:'할께',explanation:'약속을 나타내는 어미는 ‘-ㄹ게’예요.' },
@@ -93,9 +94,42 @@ const eligible = (grade:number) => {
   if (grade === 5) return VERIFIED.filter(x=>x.grade===4||x.grade===5)
   return VERIFIED
 }
-const fallbackPrompt = (pair:VerifiedPair, kind:'choice'|'write') =>
-  kind==='write' ? '‘'+pair.wrong+'’의 틀린 맞춤법을 바르게 고쳐 쓰세요.'
-    : '다음 중 올바른 맞춤법을 고르세요.'
+const CONTEXT_BY_ANSWER: Record<string,string> = {
+  '웬일':'네가 먼저 숙제를 하다니, 이게 무슨 (____)이야?',
+  '며칠':'우리는 여행을 (____) 동안 다녀올까?',
+  '돼':'숙제를 다 했으니 이제 놀아도 (____).',
+  '안':'오늘은 몸이 아파서 학교에 (____) 가.',
+  '낫다':'동생은 어제까지 아팠지만 이제 감기가 (____).',
+  '낮다':'나는 너보다 시험 점수가 (____).',
+  '떡볶이':'나는 매콤한 (____)를 먹는 것을 좋아한다.',
+  '베개':'잠잘 때 머리 아래에 (____)를 놓았다.',
+  '설거지':'저녁을 먹고 나서 내가 (____)를 했다.',
+  '오랜만에':'전학 간 친구를 (____) 만났다.',
+  '금세':'달리기를 시작하자마자 (____) 결승선에 도착했다.',
+  '어이없다':'그런 이유로 화를 내다니 정말 (____).',
+  '함께':'우리 가족은 주말마다 (____) 산책한다.',
+  '할게':'내가 내일 꼭 전화(____).',
+  '뵙겠습니다':'선생님, 내일 다시 (____).',
+  '문득':'길을 걷다가 (____) 친구가 생각났다.',
+  '깨끗이':'나는 책상을 걸레로 (____) 닦았다.',
+  '가리켰다':'선생님은 손가락으로 칠판을 (____).',
+  '가르쳤다':'선생님은 우리에게 수학을 (____).',
+  '부딪쳐':'공에 머리를 (____) 다쳤다.',
+  '잊어버려서':'친구와의 약속을 (____) 미안했다.',
+  '안팎':'우리 가족은 집 (____)을 청소했다.',
+  '대가':'열심히 일한 (____)를 받았다.',
+  '곰곰이':'나는 어려운 문제를 (____) 생각했다.',
+  '눈곱':'아침에 일어나니 눈에 (____)이 끼었다.',
+  '무릅쓰고':'소방관은 위험을 (____) 사람들을 구했다.',
+  '훗날':'나는 (____) 훌륭한 의사가 되고 싶다.',
+  '뒤처지지':'친구들보다 (____) 않으려고 노력했다.',
+  '닦달했다':'엄마는 숙제를 하지 않은 동생을 (____).',
+}
+const contextual = (q: SpellingQuestion): string =>
+  CONTEXT_BY_ANSWER[q.answer] ?? q.prompt
+const fallbackPrompt = (pair:VerifiedPair, _kind:'choice'|'write') =>
+  CONTEXT_BY_ANSWER[pair.right] ?? '문장을 읽고 (____)에 알맞은 말을 고르세요.'
+
 const build = (pair:VerifiedPair, grade:number, kind:'choice'|'write',
                prompt?:string, explanation?:string):SpellingQuestion => {
   const options = kind === 'choice' ? (
@@ -154,9 +188,7 @@ export const generateDailySpellingQuiz = onSchedule({
     const pair=VERIFIED.find(x=>x.right===review?.answer || review?.id.startsWith(x.id+':'))
     review=pair ? {
       ...review, kind:'choice',
-      prompt:review.prompt
-        .replace(/틀린 낱말을 (?:바르게 고쳐 쓰세요|고쳐 쓰세요|바로 쓰세요)/g,'바른 낱말을 고르세요')
-        .replace(/틀린 맞춤법을 바르게 고쳐 쓰세요/g,'바른 표기를 고르세요'),
+      prompt: CONTEXT_BY_ANSWER[review.answer] ?? review.prompt,
       options:stableHash(tomorrow+review.id)%2 ? [pair.right,pair.wrong] : [pair.wrong,pair.right],
     } : undefined
   }
@@ -165,6 +197,7 @@ export const generateDailySpellingQuiz = onSchedule({
   const tasks=selections.map((item)=>({
     id:item.id, right:item.right, wrong:item.wrong,
     kind:'choice' as const,
+    example: CONTEXT_BY_ANSWER[item.right],
     explanation:item.explanation,
   }))
   let generated:SpellingQuestion[]=[]
@@ -180,7 +213,8 @@ export const generateDailySpellingQuiz = onSchedule({
             systemInstruction:{parts:[{text:
               '당신은 한국 초등학교 국어 맞춤법 교사입니다. 주어진 정답/오답 단어쌍을 절대 바꾸지 말고 문제의 문맥만 자연스럽게 만드세요. '+
               '반드시 각 항목에 정확한 id, prompt를 넣으세요. '+
-              '모든 문제는 객관식 2지선다입니다. 문맥에 맞는 표기를 고르도록 짧은 빈칸 문장을 만드세요. '+
+              '모든 문제는 객관식 2지선다입니다. 예시 문장의 의미·정답·문법을 보존하고 문장 표현만 자연스럽게 바꾸세요. '+
+              '반드시 한 개의 (____) 빈칸을 포함한 완전한 문장을 쓰고, 정답 단어를 문장에 노출하지 마세요. '+
               '다른 의미도 되는 모호한 문맥을 만들지 마세요. '+
               '설명은 넣지 말고 JSON 객체 {"questions":[{"id":"...","prompt":"..."}]}만 출력하세요.'
             }]},
@@ -204,7 +238,12 @@ export const generateDailySpellingQuiz = onSchedule({
       const constructed=tasks.map((task,i)=>{
         const item=obj.questions?.find(q=>q.id===task.id)
         const prompt=item?.prompt?.trim()||''
-        if (!prompt || prompt.length>200 || pastPrompts.includes(prompt)) throw new Error('Malformed quiz prompt')
+        if (!prompt || prompt.length>200 || pastPrompts.includes(prompt) || 
+            !/\(\s*_{3,}\s*\)/.test(prompt) || 
+            prompt.includes(task.right) || prompt.includes(task.wrong) ||
+            prompt.replace(/\(\s*_{3,}\s*\)/g,'').trim().length<14) {
+          throw new Error('Ambiguous or non-contextual Gemini prompt')
+        }
         const answerSource=selections[i]
         return build(answerSource,grade,'choice',prompt)
       })

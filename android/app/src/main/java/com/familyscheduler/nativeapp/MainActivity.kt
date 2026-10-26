@@ -813,12 +813,38 @@ class MainActivity : ComponentActivity() {
         alert.show()
     }
 
+    // The quiz is a shared Firestore document. Android never needs a Gemini
+    // API key: the scheduled backend creates the questions for all three members.
+    private fun spellingHomeworkButton(): MaterialButton {
+        val button = MaterialButton(this).apply {
+            text = "맞춤법 시험 · 오늘 3문제 · 가족 순위"
+        }
+        fun refreshStatus() {
+            val day = LocalDate.now(ZoneId.of("Asia/Seoul")).toString()
+            com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                .collection("scheduleDays").document(day).get()
+                .addOnSuccessListener { snap ->
+                    val quiz = snap.get("spellingQuiz") as? Map<*, *>
+                    val submissions = quiz?.get("submissions") as? Map<*, *>
+                    val mine = submissions?.get(repo.signedMember()) as? Map<*, *>
+                    val score = (mine?.get("score") as? Number)?.toInt()
+                    val source = if (quiz?.get("source") == "ai") "Gemini AI" else "맞춤법"
+                    button.text = if (score != null)
+                        "✓ 오늘 맞춤법 완료 · ${score}/3점 · 가족 순위"
+                    else
+                        "${source} 시험 · 오늘 3문제 · 가족 순위"
+                }
+        }
+        button.setOnClickListener {
+            SpellingQuizDialog(this, repo.signedMember(), onClosed = { refreshStatus() }).show()
+        }
+        refreshStatus()
+        return button
+    }
+
     private fun showHomeworkDialog() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20)) }
-        box.addView(MaterialButton(this).apply {
-            text = "맞춤법 시험 · 하루 3문제 · 가족 순위"
-            setOnClickListener { SpellingQuizDialog(this@MainActivity, repo.signedMember()).show() }
-        }, matchWrap(bottom = 12))
+        box.addView(spellingHomeworkButton(), matchWrap(bottom = 12))
         val start = edit("시작일", selectedDate.toString(), false).apply { setOnClickListener { pickDate(this) } }
         val end = edit("종료일", selectedDate.toString(), false).apply { setOnClickListener { pickDate(this) } }
         val dateRow = LinearLayout(this)
@@ -1199,10 +1225,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(8), dp(6), 0, dp(10))
         })
 
-        box.addView(MaterialButton(this).apply {
-            text = "맞춤법 숙제 · 오늘 3문제 풀기 / 가족 순위"
-            setOnClickListener { SpellingQuizDialog(this@MainActivity, repo.signedMember()).show() }
-        }, matchWrap(bottom = 10))
+        box.addView(spellingHomeworkButton(), matchWrap(bottom = 10))
 
         notices.firstOrNull()?.let { notice ->
             box.addView(TextView(this).apply {

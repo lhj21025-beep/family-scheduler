@@ -28,3 +28,5 @@
 
 /* Compact, icon-only entry in the existing schedule toolbar. */
 .top-actions .spelling-top-icon { min-width: 38px; width: 38px; flex: 0 0 38px; padding: 5px; font-size: 19px; line-height: 1.1; text-align: center; }
+
+.spelling-context-help{display:block;font-size:13px;color:#667085;font-weight:500;margin-bottom:7px}

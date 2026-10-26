@@ -50,6 +50,7 @@ class SpellingQuizDialog(
         Item("n4-01",4,"choice","‘이게 무슨 ___이야?’에 알맞은 말은?",listOf("웬일","왠일"),"웬일","‘웬일’이 바른 표기예요."),
         Item("n4-02",4,"choice","‘___ 동안 못 만났니?’에 알맞은 말은?",listOf("며칠","몇일"),"며칠","‘며칠’이 맞는 표기예요."),
         Item("n4-03",4,"choice","‘집에 가도 ___.’에 알맞은 말은?",listOf("돼","되"),"돼","‘돼’는 ‘되어’의 준말이에요."),
+        Item("n4-11",4,"choice","‘나는 너보다 시험 점수가 ___.’에 알맞은 말은?",listOf("낮다","낫다"),"낮다","점수가 높지 않다는 뜻은 ‘낮다’예요."),
         Item("n4-04",4,"choice","‘학교에 ___ 가.’에 알맞은 말은?",listOf("안","않"),"안","부정 부사는 ‘안’이에요."),
         Item("n4-05",4,"choice","‘밥을 먹고 ___를 했다.’",listOf("설거지","설겆이"),"설거지","‘설거지’가 표준어예요."),
         Item("n4-06",4,"choice","‘___를 베고 잤다.’",listOf("베개","배게"),"베개","‘베개’가 바른 표기예요."),
@@ -102,14 +103,54 @@ class SpellingQuizDialog(
                else listOf(question.answer, wrong)
     }
 
-    private fun choicePrompt(question: Item): String =
-        if (question.kind == "write")
-            question.prompt
-                .replace("틀린 낱말을 바르게 고쳐 쓰세요", "바른 낱말을 고르세요")
-                .replace("틀린 낱말을 고쳐 쓰세요", "바른 낱말을 고르세요")
-                .replace("틀린 낱말을 바로 쓰세요", "바른 낱말을 고르세요")
-                .replace("틀린 맞춤법을 바르게 고쳐 쓰세요", "바른 표기를 고르세요")
-        else question.prompt
+    // Vetted contexts fix previously saved, context-free questions immediately.
+    // Firestore submissions/leaderboard remain untouched.
+    private val exampleByAnswer = mapOf(
+        "웬일" to "네가 먼저 숙제를 하다니, 이게 무슨 (____)이야?",
+        "며칠" to "우리는 여행을 (____) 동안 다녀올까?",
+        "돼" to "숙제를 다 했으니 이제 놀아도 (____).",
+        "안" to "오늘은 몸이 아파서 학교에 (____) 가.",
+        "낫다" to "동생은 어제까지 아팠지만 이제 감기가 (____).",
+        "낮다" to "나는 너보다 시험 점수가 (____).",
+        "어이없는" to "아무 말 없이 약속을 취소하다니 정말 (____) 일이야.",
+        "어이없다" to "그런 이유로 화를 내다니 정말 (____).",
+        "금세" to "달리기를 시작하자마자 (____) 결승선에 도착했다.",
+        "함께" to "우리 가족은 주말마다 (____) 산책한다.",
+        "떡볶이" to "나는 매콤한 (____)를 먹는 것을 좋아한다.",
+        "설거지" to "저녁을 먹고 나서 내가 (____)를 했다.",
+        "베개" to "잠잘 때 머리 아래에 (____)를 놓았다.",
+        "오랜만에" to "전학 간 친구를 (____) 만났다.",
+        "어떡해" to "숙제를 실수로 지워 버렸어. 이제 (____)?",
+        "할게" to "내가 내일 꼭 전화(____).",
+        "갈게" to "내가 내일 꼭 (____).",
+        "뵙겠습니다" to "선생님, 내일 다시 (____).",
+        "부딪쳐" to "공에 머리를 (____) 다쳤다.",
+        "문득" to "길을 걷다가 (____) 친구가 생각났다.",
+        "깨끗이" to "나는 책상을 걸레로 (____) 닦았다.",
+        "가르쳤다" to "선생님은 우리에게 수학을 (____).",
+        "가리켰다" to "선생님은 손가락으로 칠판을 (____).",
+        "잃어버려" to "열쇠를 (____) 집에 들어가지 못했다.",
+        "잊어버려서" to "친구와의 약속을 (____) 미안했다.",
+        "안팎" to "우리 가족은 집 (____)을 청소했다.",
+        "대가" to "열심히 일한 (____)를 받았다.",
+        "곰곰이" to "나는 어려운 문제를 (____) 생각했다.",
+        "빈틈없이" to "경비원은 문단속을 (____) 했다.",
+        "닦달했다" to "엄마는 숙제를 하지 않은 동생을 (____).",
+        "뒤처지지" to "친구들보다 (____) 않으려고 노력했다.",
+        "훗날" to "나는 (____) 훌륭한 의사가 되고 싶다.",
+        "눈곱" to "아침에 일어나니 눈에 (____)이 끼었다.",
+        "무릅쓰고" to "소방관은 위험을 (____) 사람들을 구했다.",
+        "꼼꼼히" to "선생님은 시험지를 (____) 살펴보셨다."
+    )
+
+    private fun choicePrompt(question: Item): String {
+        val original = question.prompt
+        val generic = original.contains("다음 중") || original.contains("틀린 낱말을") ||
+            original.contains("올바른 맞춤법을 고르세요")
+        val contextual = Regex("_{3,}").containsMatchIn(original) &&
+            original.replace(Regex("_{3,}"), "").trim().length >= 12 && !generic
+        return if (contextual) original else (exampleByAnswer[question.answer] ?: original)
+    }
 
     private fun grade() = (4 + today.year - 2026 - if (today.monthValue < 3) 1 else 0).coerceIn(1, 6)
     private fun text(value: String, size: Float = 15f, bold: Boolean = false): TextView =
@@ -222,7 +263,7 @@ class SpellingQuizDialog(
             box.addView(text("오늘 완료 · " + (mine["score"] ?: 0).toString() + "/3점", 17f, true))
         }
         questions.forEachIndexed { index, item ->
-            box.addView(text((index + 1).toString() + "번 · " + choicePrompt(item), 16f, true))
+            box.addView(text((index + 1).toString() + "번 · 빈칸에 들어갈 알맞은 단어를 고르세요.\n" + choicePrompt(item), 16f, true))
             val previous = oldAnswers?.getOrNull(index).orEmpty()
             val choices = optionsFor(item)
             if (choices.size != 2) {

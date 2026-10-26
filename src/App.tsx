@@ -1327,6 +1327,15 @@ export default function App() {
           <button onClick={() => setNoticeOpen((p) => !p)}>📣 가족 메모</button>
           <button onClick={() => setStatsOpen((p) => !p)}>📊 통계</button>
           <button
+            className="spelling-top-icon"
+            type="button"
+            title="맞춤법 시험"
+            aria-label="맞춤법 시험"
+            onClick={() => setSpellingOpen(true)}
+          >
+            🔤
+          </button>
+          <button
             onClick={() => {
               setHomeworkStartDate(today);
               setHomeworkEndDate(today);
@@ -1515,9 +1524,6 @@ export default function App() {
                 : "없음"}
             </span>
           </div>
-          <button type="button" className="spelling-entry" onClick={() => { setTodayOpen(false); setSpellingOpen(true); }}>
-            맞춤법 숙제 · 오늘 3문제 풀기 / 가족 순위
-          </button>
           {notices[0] && (
             <div className="mini-notice">
               <b>📣 최근 가족 메모</b>
@@ -1723,9 +1729,6 @@ export default function App() {
               <h2>📝 숙제 체크</h2>
               <button onClick={() => setHomeworkOpen(false)}>×</button>
             </div>
-            <button type="button" className="spelling-entry" onClick={() => { setHomeworkOpen(false); setSpellingOpen(true); }}>
-              맞춤법 시험 · 하루 3문제 · 가족 순위 보기
-            </button>
             <div className="form-grid">
               <label>
                 시작일

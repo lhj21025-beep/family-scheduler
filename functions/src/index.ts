@@ -309,3 +309,5 @@ export const notifyDailyHomeworkComplete = onDocumentUpdated(
   },
 )
 
+
+export { generateDailySpellingQuiz } from './spelling-ai.js'

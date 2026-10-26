@@ -125,8 +125,6 @@ const CONTEXT_BY_ANSWER: Record<string,string> = {
   '뒤처지지':'친구들보다 (____) 않으려고 노력했다.',
   '닦달했다':'엄마는 숙제를 하지 않은 동생을 (____).',
 }
-const contextual = (q: SpellingQuestion): string =>
-  CONTEXT_BY_ANSWER[q.answer] ?? q.prompt
 const fallbackPrompt = (pair:VerifiedPair, _kind:'choice'|'write') =>
   CONTEXT_BY_ANSWER[pair.right] ?? '문장을 읽고 (____)에 알맞은 말을 고르세요.'
 
@@ -191,6 +189,9 @@ export const generateDailySpellingQuiz = onSchedule({
       prompt: CONTEXT_BY_ANSWER[review.answer] ?? review.prompt,
       options:stableHash(tomorrow+review.id)%2 ? [pair.right,pair.wrong] : [pair.wrong,pair.right],
     } : undefined
+  }
+  if (review && CONTEXT_BY_ANSWER[review.answer]) {
+    review={...review,prompt:CONTEXT_BY_ANSWER[review.answer]}
   }
   const wanted=review?2:QUESTION_LIMIT
   const selections=fresh.slice(0,wanted)

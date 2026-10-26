@@ -47,5 +47,5 @@ jobs:
         working-directory: functions
         run: npm run build
 
-      - name: Deploy homework completion function
-        run: npx --yes firebase-tools@13.35.1 deploy --only functions:notifyDailyHomeworkComplete --project family-scheduler-44a8e --non-interactive
+      - name: Deploy homework completion and daily spelling functions
+        run: npx --yes firebase-tools@13.35.1 deploy --only functions:notifyDailyHomeworkComplete,functions:generateDailySpellingQuiz --project family-scheduler-44a8e --non-interactive

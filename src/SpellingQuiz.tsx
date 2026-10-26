@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { collection, doc, getDocs, onSnapshot, query, runTransaction, where } from "firebase/firestore";
 import { db } from "./firebase";
 import {
-  DailySpellingQuiz, SpellingMember, fallbackQuiz, isCorrect, kstDay, shiftedDay,
+  DailySpellingQuiz, SpellingMember, fallbackQuiz, isCorrect, kstDay, shiftedDay, spellingChoices, spellingChoicePrompt,
 } from "./spellingQuiz";
 import "./spelling.css";
 
@@ -92,7 +92,7 @@ export default function SpellingQuiz({
   }, [days, rankMode, monthlyStart, weeklyStart, today]);
 
   async function submit() {
-    if (!quiz || busy || mySubmission || answers.some(a => !a.trim())) return;
+    if (!quiz || busy || mySubmission || answers.some(a => !a.trim()) || quiz.questions.some(q => spellingChoices(q).length !== 2)) return;
     setBusy(true);
     setError("");
     try {
@@ -142,35 +142,23 @@ export default function SpellingQuiz({
                   <section className="spelling-question" key={q.id}>
                     <div className="spelling-question-title">
                       <b>{i + 1}번</b>
-                      <span>{q.kind === "write" ? "직접 쓰기" : "고르기"}</span>
+                      <span>객관식</span>
                     </div>
-                    <p>{q.prompt}</p>
-                    {q.kind === "choice" ? (
-                      <div className="spelling-options">
-                        {q.options?.map(option => (
-                          <label className={chosen === option ? "selected" : ""} key={option}>
-                            <input
-                              type="radio"
-                              name={"spelling-" + i}
-                              checked={chosen === option}
-                              disabled={!!mySubmission}
-                              onChange={() => setAnswers(old => old.map((v, j) => j === i ? option : v))}
-                            />
-                            {option}
-                          </label>
-                        ))}
-                      </div>
-                    ) : (
-                      <input
-                        className="spelling-write"
-                        aria-label={i + 1 + "번 정답"}
-                        value={chosen}
-                        disabled={!!mySubmission}
-                        autoComplete="off"
-                        onChange={e => setAnswers(old => old.map((v, j) => j === i ? e.target.value : v))}
-                        placeholder="맞는 낱말을 입력하세요"
-                      />
-                    )}
+                    <p>{spellingChoicePrompt(q)}</p>
+                    <div className="spelling-options">
+                      {spellingChoices(q).map(option => (
+                        <label className={chosen === option ? "selected" : ""} key={option}>
+                          <input
+                            type="radio"
+                            name={"spelling-" + i}
+                            checked={chosen === option}
+                            disabled={!!mySubmission}
+                            onChange={() => setAnswers(old => old.map((v, j) => j === i ? option : v))}
+                          />
+                          {option}
+                        </label>
+                      ))}
+                    </div>
                     {mySubmission && (
                       <div className={"spelling-explanation " + (correct ? "correct" : "incorrect")}>
                         <b>{correct ? "정답" : "오답"} · {q.answer}</b>
@@ -182,7 +170,7 @@ export default function SpellingQuiz({
               })}
             </div>
             {!mySubmission && (
-              <button type="button" className="spelling-submit" disabled={busy || !quiz.questions.length || answers.some(a => !a.trim())}
+              <button type="button" className="spelling-submit" disabled={busy || quiz.questions.length !== 3 || quiz.questions.some(q => spellingChoices(q).length !== 2) || answers.some(a => !a.trim())}
                 onClick={() => void submit()}>
                 {busy ? "제출 중…" : "3문제 채점하고 제출"}
               </button>

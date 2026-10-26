@@ -34,6 +34,10 @@ jobs:
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
+      - name: Identify deployment account for Secret Manager permissions
+        run: |
+          node -e "const fs=require('fs'); const file=process.env.GOOGLE_APPLICATION_CREDENTIALS; const data=JSON.parse(fs.readFileSync(file,'utf8')); console.log('Deployment service account:', data.client_email)"
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:

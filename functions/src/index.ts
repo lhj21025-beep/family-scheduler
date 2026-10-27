@@ -107,7 +107,6 @@ export const sendScheduleReminders = onSchedule(
     const day = daySnap.data() as {
       events?: Record<string, EventItem>
       sentAlarms?: Record<string, string>
-      homeworkAllCompleteNotifiedAt?: string
     }
     const family = familySnap.data() as FamilyData
     const events = Object.values(day.events ?? {})
@@ -136,38 +135,6 @@ export const sendScheduleReminders = onSchedule(
       }
     }
 
-    const homeworks = events.filter(
-      event => event.kind === 'homework' && event.memberIds?.includes('son'),
-    )
-    const allHomeworkCompleted =
-      homeworks.length > 0 && homeworks.every(homework => homework.completed && homework.completedAt)
-    const latestHomework = allHomeworkCompleted
-      ? [...homeworks].sort((a, b) => completionEpoch(b.completedAt) - completionEpoch(a.completedAt))[0]
-      : undefined
-    const shouldSendHomeworkComplete =
-      allHomeworkCompleted &&
-      !day.homeworkAllCompleteNotifiedAt &&
-      latestHomework?.completedBy === 'son' &&
-      completionKstDate(latestHomework.completedAt) === today
-
-    if (shouldSendHomeworkComplete) {
-      const parentTokens = pushTokens.filter(token => token.memberId === 'me' || token.memberId === 'wife')
-      if (parentTokens.length) {
-        const homeworkLines = [...homeworks]
-          .sort((a, b) => completionEpoch(a.completedAt) - completionEpoch(b.completedAt))
-          .map(homework => `${cleanHomeworkTitle(homework.title)} · ${completionKstTime(homework.completedAt)} 완료`)
-        const body = `오늘 숙제를 모두 완료했어요.\n${homeworkLines.join('\n')}`
-        for (const recipient of parentTokens) {
-          messages.push({
-            token: recipient.token,
-            title: '✅ 강천이 오늘 숙제를 모두 완료했어요',
-            body,
-            key: 'homework_all_complete',
-          })
-        }
-      }
-    }
-
     if (!messages.length) return
 
     const unique = new Map<string, { token: string; title: string; body: string; key: string }>()
@@ -189,15 +156,6 @@ export const sendScheduleReminders = onSchedule(
     pending.forEach((m, index) => {
       if (response.responses[index]?.success) updates[`sentAlarms.${m.key}`] = now.toISOString()
     })
-
-    if (shouldSendHomeworkComplete) {
-      const homeworkPushes = pending
-        .map((message, index) => ({ message, response: response.responses[index] }))
-        .filter(item => item.message.key === 'homework_all_complete')
-      if (homeworkPushes.some(item => item.response?.success)) {
-        updates.homeworkAllCompleteNotifiedAt = now.toISOString()
-      }
-    }
 
     if (Object.keys(updates).length) {
       await daySnap.ref.update(updates)

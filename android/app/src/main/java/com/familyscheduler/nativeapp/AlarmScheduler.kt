@@ -52,6 +52,15 @@ object AlarmScheduler {
         }
     }
 
+    fun cancelAll(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val manager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        prefs.all.keys.forEach { key ->
+            runCatching { manager.cancel(pending(context, key, PendingIntent.FLAG_NO_CREATE)) }
+        }
+        prefs.edit().clear().apply()
+    }
+
     fun restore(context: Context) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs.all.forEach { (key, raw) ->

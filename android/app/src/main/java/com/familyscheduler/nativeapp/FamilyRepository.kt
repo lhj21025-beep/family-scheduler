@@ -624,6 +624,17 @@ class FamilyRepository {
             .addOnFailureListener { done(emptyList()) }
     }
 
+    fun loadAllEvents(done: (Result<List<FamilyEvent>>) -> Unit) {
+        db.collection("scheduleDays").get()
+            .addOnSuccessListener { snapshots ->
+                val rows = snapshots.documents.flatMap { parseEvents(it) }
+                    .filter { it.kind != "approval-alert" }
+                    .sortedBy(FamilyEvent::start)
+                done(Result.success(rows))
+            }
+            .addOnFailureListener { done(Result.failure(it)) }
+    }
+
     fun searchEvents(term: String, done: (Result<List<FamilyEvent>>) -> Unit) {
         val needle = term.trim().lowercase()
         if (needle.isBlank()) return done(Result.success(emptyList()))

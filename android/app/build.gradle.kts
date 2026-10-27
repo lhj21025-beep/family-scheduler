@@ -12,8 +12,8 @@ android {
         applicationId = "com.familyscheduler.nativeapp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.6.6"
+        versionCode = 20
+        versionName = "1.6.11"
     }
 
     signingConfigs {

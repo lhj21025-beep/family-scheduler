@@ -1,5 +1,6 @@
 package com.familyscheduler.nativeapp
 
+import android.Manifest
 import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,9 +8,11 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
+import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import org.json.JSONObject
@@ -85,7 +88,11 @@ object AlarmScheduler {
             .setAutoCancel(true)
             .setContentIntent(open)
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(99001, notification) }
+        if (Build.VERSION.SDK_INT < 33 ||
+            ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) {
+            NotificationManagerCompat.from(context).notify(99001, notification)
+        }
     }
 
     private fun schedule(context: Context, key: String, trigger: Long, title: String, location: String, minutes: Int) {
@@ -119,7 +126,11 @@ class AlarmReceiver : BroadcastReceiver() {
             .setSmallIcon(R.mipmap.ic_launcher).setContentTitle("📅 $title").setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body)).setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true).setContentIntent(open).setVibrate(longArrayOf(0, 250, 120, 250)).build()
-        runCatching { NotificationManagerCompat.from(context).notify(key.hashCode(), notification) }
+        if (Build.VERSION.SDK_INT < 33 ||
+            ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) {
+            NotificationManagerCompat.from(context).notify(key.hashCode(), notification)
+        }
         context.getSharedPreferences("scheduled_family_alarms", Context.MODE_PRIVATE).edit().remove(key).apply()
     }
 }

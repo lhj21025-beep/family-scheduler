@@ -62,4 +62,5 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore-ktx")
     implementation("com.google.firebase:firebase-messaging-ktx")
     implementation("com.github.usingsky:KoreanLunarCalendar:0.4.0")
+    testImplementation("junit:junit:4.13.2")
 }

@@ -45,6 +45,17 @@ class MainActivity : ComponentActivity() {
             if (granted) performGoogleCalendarSync()
             else toast("Google 캘린더를 읽으려면 캘린더 권한을 허용해주세요.")
         }
+    private var showTestAfterNotificationPermission = false
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val shouldTest = showTestAfterNotificationPermission
+            showTestAfterNotificationPermission = false
+            if (granted) {
+                if (shouldTest) AlarmScheduler.showTestNotification(this)
+            } else {
+                toast("알림을 사용하려면 알림 권한을 허용해주세요.")
+            }
+        }
     private var month = YearMonth.now()
     private var selectedDate = LocalDate.now()
     private var allEvents = emptyList<FamilyEvent>()
@@ -274,6 +285,10 @@ class MainActivity : ComponentActivity() {
         )
         repo.moveOrSaveEvent(event, next) { result ->
             runOnUiThread {
+                if (result.isSuccess) {
+                    AlarmScheduler.cancelEvent(this, event.id)
+                    AlarmScheduler.scheduleEvent(this, next)
+                }
                 toast(if (result.isSuccess) "일정을 이동했습니다." else "일정 이동에 실패했습니다.")
             }
         }
@@ -288,6 +303,10 @@ class MainActivity : ComponentActivity() {
         )
         repo.moveOrSaveEvent(event, next) { result ->
             runOnUiThread {
+                if (result.isSuccess) {
+                    AlarmScheduler.cancelEvent(this, event.id)
+                    AlarmScheduler.scheduleEvent(this, next)
+                }
                 toast(if (result.isSuccess) "일정 시간을 변경했습니다." else "일정 시간 변경에 실패했습니다.")
             }
         }
@@ -385,6 +404,24 @@ class MainActivity : ComponentActivity() {
         }.getOrElse { value.replace('T', ' ').removeSuffix("Z").take(16) }
     }
 
+    private fun sameEventSeriesForAlarm(candidate: FamilyEvent, target: FamilyEvent): Boolean {
+        if (candidate.kind != "event" || target.kind != "event") return false
+        if (!target.eventSeriesId.isNullOrBlank()) return candidate.eventSeriesId == target.eventSeriesId
+        if (!candidate.eventSeriesId.isNullOrBlank()) return false
+        return candidate.title.trim() == target.title.trim() &&
+            candidate.start.drop(11).take(5) == target.start.drop(11).take(5) &&
+            candidate.allDay == target.allDay &&
+            candidate.memberIds.toSet() == target.memberIds.toSet() &&
+            candidate.location.orEmpty().trim() == target.location.orEmpty().trim() &&
+            candidate.memo.orEmpty().trim() == target.memo.orEmpty().trim()
+    }
+
+    private fun affectedSeriesEvents(event: FamilyEvent, mode: String): List<FamilyEvent> =
+        allEvents.filter { candidate ->
+            val same = if (mode == "one") candidate.id == event.id else sameEventSeriesForAlarm(candidate, event)
+            same && (mode != "future" || candidate.date >= event.date)
+        }
+
     private fun showEventDetails(event: FamilyEvent) {
         if (event.kind == "event") {
             repo.eventSeriesCount(event) { result ->
@@ -458,8 +495,10 @@ class MainActivity : ComponentActivity() {
             .setTitle("반복 일정 삭제")
             .setItems(choices) { _, which ->
                 val mode = listOf("one", "future", "all")[which]
+                val affected = affectedSeriesEvents(event, mode)
                 repo.deleteEventSeries(event, mode) { result ->
                     runOnUiThread {
+                        if (result.isSuccess) affected.forEach { AlarmScheduler.cancelEvent(this, it.id) }
                         toast(
                             if (result.isSuccess) "${result.getOrDefault(0)}개의 일정을 삭제했습니다."
                             else "삭제에 실패했습니다: ${result.exceptionOrNull()?.message.orEmpty()}"
@@ -651,6 +690,14 @@ class MainActivity : ComponentActivity() {
         box.addView(label("반복 종료 방식")); box.addView(repeatEndMode)
         box.addView(label("반복 횟수")); box.addView(repeatCountPreset); box.addView(repeatCount)
         box.addView(repeatUntil); box.addView(lunarSummary)
+        if (existing != null) {
+            box.addView(TextView(this).apply {
+                text = "기존 일정에서는 반복 규칙 자체는 변경하지 않고, 제목·시간·가족·장소·메모·알림만 수정합니다. 반복 범위는 수정 버튼을 누른 뒤 선택합니다."
+                textSize = 12f
+                setTextColor(0xFF64748B.toInt())
+                setPadding(0, dp(4), 0, dp(6))
+            })
+        }
 
         fun updateRepeatVisibility() {
             val repeatEnabled = repeatSpinner.selectedItemPosition != 0
@@ -678,6 +725,13 @@ class MainActivity : ComponentActivity() {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { updateRepeatVisibility() }
         }
         updateRepeatVisibility()
+        if (existing != null) {
+            repeatSpinner.isEnabled = false
+            repeatEndMode.isEnabled = false
+            repeatCountPreset.isEnabled = false
+            repeatCount.isEnabled = false
+            repeatUntil.isEnabled = false
+        }
 
         val scroller = ScrollView(this).apply { addView(box) }
         val alert = AlertDialog.Builder(this)
@@ -698,6 +752,9 @@ class MainActivity : ComponentActivity() {
                     ?: return@setOnClickListener toast("시작 시간을 확인해 주세요.")
                 val end = runCatching { LocalTime.parse(endInput.text.toString()) }.getOrNull()
                     ?: return@setOnClickListener toast("종료 시간을 확인해 주세요.")
+                if (!allDay.isChecked && !end.isAfter(start)) {
+                    return@setOnClickListener toast("종료 시간은 시작 시간보다 뒤여야 합니다.")
+                }
                 val repeat = repeatCodes[repeatSpinner.selectedItemPosition]
                 val count = repeatCount.text.toString().toIntOrNull()?.coerceIn(1, 365) ?: 1
                 val until = if (repeat != "none" && repeatEndMode.selectedItemPosition == 1)
@@ -720,27 +777,28 @@ class MainActivity : ComponentActivity() {
                         alarmMinutes = selectedAlarms.sorted(),
                         location = location.text.toString().trim(),
                         memo = memo.text.toString().trim(),
-                        seriesRepeat = if (repeat == "none") null else repeat,
-                        seriesRepeatCount = if (repeat == "none") null else count,
-                        seriesRepeatUntil = until?.toString(),
-                        repeat = if (existing.repeat != "none") repeat else existing.repeat,
-                        repeatCount = if (existing.repeat != "none") count else existing.repeatCount,
-                        repeatEndMode = if (until != null) "date" else "count",
-                        repeatUntil = until?.toString(),
-                        calendarType = if (repeat == "lunarYearly") "lunar" else "solar",
-                        lunarMonth = if (repeat == "lunarYearly") lunar?.month else null,
-                        lunarDay = if (repeat == "lunarYearly") lunar?.day else null,
-                        lunarLeapMonth = repeat == "lunarYearly" && lunar?.leap == true,
+                        seriesRepeat = existing.seriesRepeat,
+                        seriesRepeatCount = existing.seriesRepeatCount,
+                        seriesRepeatUntil = existing.seriesRepeatUntil,
+                        repeat = existing.repeat,
+                        repeatCount = existing.repeatCount,
+                        repeatEndMode = existing.repeatEndMode,
+                        repeatUntil = existing.repeatUntil,
+                        calendarType = existing.calendarType,
+                        lunarMonth = existing.lunarMonth,
+                        lunarDay = existing.lunarDay,
+                        lunarLeapMonth = existing.lunarLeapMonth,
                     )
 
                     val performUpdate: (String) -> Unit = { mode ->
+                        val affected = affectedSeriesEvents(existing, mode)
                         alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
                         repo.updateEventSeries(existing, edited, mode) { result ->
                             runOnUiThread {
                                 if (result.isSuccess) {
-                                    AlarmScheduler.cancelEvent(this, existing.id)
-                                    AlarmScheduler.scheduleEvent(this, edited)
+                                    affected.forEach { AlarmScheduler.cancelEvent(this, it.id) }
                                     alert.dismiss()
+                                    listenMonth()
                                     toast("${result.getOrDefault(1)}개의 일정을 수정했습니다.")
                                 } else {
                                     alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
@@ -1351,13 +1409,28 @@ class MainActivity : ComponentActivity() {
         val items=arrayOf("🔔 알림 권한 및 정확한 알람 설정","테스트 알림","🚪 로그아웃")
         AlertDialog.Builder(this).setTitle("⚙️ 알림 / 앱 설정").setItems(items){_,which->
             when(which){
-                0->{requestNotificationPermission();if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.S)runCatching{startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,Uri.parse("package:$packageName")))}}
-                1->{requestNotificationPermission();AlarmScheduler.showTestNotification(this)}
+                0->{
+                    requestNotificationPermission()
+                    if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.S)runCatching{
+                        startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,Uri.parse("package:$packageName")))
+                    }
+                }
+                1->requestNotificationPermission(showTestAfterGrant = true)
                 else->{repo.logout();showLogin()}
             }
         }.setNegativeButton("닫기",null).show()
     }
-    private fun requestNotificationPermission(){if(Build.VERSION.SDK_INT>=33&&ActivityCompat.checkSelfPermission(this,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)ActivityCompat.requestPermissions(this,arrayOf(Manifest.permission.POST_NOTIFICATIONS),1001)}
+
+    private fun requestNotificationPermission(showTestAfterGrant: Boolean = false) {
+        if (Build.VERSION.SDK_INT < 33 ||
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) {
+            if (showTestAfterGrant) AlarmScheduler.showTestNotification(this)
+            return
+        }
+        showTestAfterNotificationPermission = showTestAfterGrant
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
 
     private fun edit(hint: String, value: String, keyboard: Boolean = true) = EditText(this).apply {
         this.hint = hint; setText(value); setSelectAllOnFocus(true); setPadding(dp(12));

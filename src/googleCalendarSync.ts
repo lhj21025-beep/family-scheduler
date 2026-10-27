@@ -110,7 +110,13 @@ export async function syncGoogleFamilyCalendar(): Promise<SyncResult> {
       `calendars/${encodeURIComponent(cal.id)}/events?${params.toString()}`, accessToken, "items",
     );
     for (const e of items) {
-      if (e.status === "cancelled" || e.visibility === "private" || !e.summary?.includes(KEYWORD) || !e.start) continue;
+      const visibility = e.visibility ?? "default";
+      if (
+        e.status === "cancelled" ||
+        (visibility !== "default" && visibility !== "public") ||
+        !e.summary?.includes(KEYWORD) ||
+        !e.start
+      ) continue;
       const start = e.start.date ? `${e.start.date}T00:00` : localTime(e.start.dateTime!);
       const end = e.end?.date ? `${e.end.date}T00:00` : e.end?.dateTime ? localTime(e.end.dateTime) : undefined;
       const id = "gcal_" + await digest(cal.id + ":" + e.id);

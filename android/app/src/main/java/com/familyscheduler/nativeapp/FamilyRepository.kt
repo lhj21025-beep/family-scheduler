@@ -583,37 +583,43 @@ class FamilyRepository {
         val end = LocalDate.parse(event.homeworkEndDate ?: event.date)
         val dates = (datesBetween(start, end) + LocalDate.parse(event.date)).distinct()
         val refs = dates.map { db.collection("scheduleDays").document(it.toString()) }
-        db.runTransaction { transaction ->
-            // Firestore requires every transaction read to finish before the first write.
-            val snapshots = refs.map { transaction.get(it) }
-            var changed = 0
-            snapshots.forEachIndexed { index, snapshot ->
-                val ref = refs[index]
-                val current = parseEvents(snapshot)
-                current.filter { candidate ->
-                    candidate.kind == "homework" && candidate.homeworkId == event.homeworkId &&
-                        (candidate.id == event.id || (
-                            candidate.homeworkSeriesId == event.homeworkSeriesId &&
-                            candidate.homeworkStartDate == event.homeworkStartDate &&
-                            candidate.homeworkEndDate == event.homeworkEndDate
-                        ))
-                }.forEach { candidate ->
-                    val next = candidate.copy(
-                        title = (if (completed) "✅ " else "📝 ") + cleanHomeworkTitle(candidate.title),
-                        completed = completed,
-                        completedAt = if (completed) nowIso() else null,
-                        completedBy = if (completed) signedMember() else null,
-                        approvedAt = null,
-                        approvedBy = null,
-                        createdBy = candidate.createdBy ?: auth.currentUser?.uid
-                    )
-                    transaction.update(ref, "events.${safeKey(candidate.id)}", next.toMap())
-                    changed++
+        com.google.android.gms.tasks.Tasks.whenAllSuccess<DocumentSnapshot>(refs.map { it.get() })
+            .addOnSuccessListener { snapshots ->
+                val batch = db.batch()
+                var changed = 0
+                val completionTime = nowIso()
+                snapshots.forEachIndexed { index, snapshot ->
+                    parseEvents(snapshot).filter { candidate ->
+                        candidate.kind == "homework" && (
+                            candidate.id == event.id ||
+                            (!event.homeworkSeriesId.isNullOrBlank() &&
+                                candidate.homeworkSeriesId == event.homeworkSeriesId &&
+                                candidate.homeworkId == event.homeworkId &&
+                                candidate.homeworkStartDate == event.homeworkStartDate &&
+                                candidate.homeworkEndDate == event.homeworkEndDate)
+                        )
+                    }.forEach { candidate ->
+                        val next = candidate.copy(
+                            title = (if (completed) "✅ " else "📝 ") + cleanHomeworkTitle(candidate.title),
+                            completed = completed,
+                            completedAt = if (completed) completionTime else null,
+                            completedBy = if (completed) signedMember() else null,
+                            approvedAt = null,
+                            approvedBy = null,
+                            createdBy = candidate.createdBy ?: auth.currentUser?.uid
+                        )
+                        batch.update(refs[index], "events.${safeKey(candidate.id)}", next.toMap())
+                        changed++
+                    }
+                }
+                if (changed == 0) {
+                    done(Result.failure(IllegalStateException("변경할 숙제 데이터를 찾지 못했습니다.")))
+                } else {
+                    batch.commit()
+                        .addOnSuccessListener { refreshWidgets(); done(Result.success(changed)) }
+                        .addOnFailureListener { done(Result.failure(it)) }
                 }
             }
-            if (changed == 0) error("변경할 숙제 데이터를 찾지 못했습니다.")
-            changed
-        }.addOnSuccessListener { refreshWidgets(); done(Result.success(it)) }
             .addOnFailureListener { done(Result.failure(it)) }
     }
 

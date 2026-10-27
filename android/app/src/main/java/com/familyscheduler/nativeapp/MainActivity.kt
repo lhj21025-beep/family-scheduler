@@ -879,14 +879,14 @@ class MainActivity : ComponentActivity() {
         val repeat = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
                 listOf("반복 안 함", "매일", "평일", "매주", "매월"))
-            setSelection(1)
+            setSelection(0)
         }
         val countPresetValues = listOf(2, 3, 5, 10, 20, 30, 60)
         val countPreset = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
                 countPresetValues.map { "${it}회" } + "직접 입력")
         }
-        val count = edit("횟수 직접 입력", "2").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        val count = edit("횟수 직접 입력", "1").apply { inputType = InputType.TYPE_CLASS_NUMBER }
         box.addView(label("반복")); box.addView(repeat)
         box.addView(label("반복 횟수")); box.addView(countPreset); box.addView(count)
 

@@ -39,6 +39,9 @@ jobs:
       - name: Prepare fixed signing key
         run: echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/family-scheduler-release.keystore
 
+      - name: Run Android lint and unit tests
+        run: gradle --project-dir android :app:lintRelease :app:testReleaseUnitTest --stacktrace
+
       - name: Build fixed-signed release APK
         run: gradle --project-dir android :app:assembleRelease --stacktrace
 

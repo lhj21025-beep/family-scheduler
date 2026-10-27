@@ -1203,129 +1203,138 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showTodaySummary() {
-        val today = LocalDate.now().toString()
-        val todayEvents = allEvents.filter { it.date == today && it.kind != "homework-complete" }
-        val hw = todayEvents.filter { it.kind == "homework" }
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        repo.loadToday { rows ->
+            runOnUiThread {
+                val todayEvents = rows.filter { it.kind != "homework-complete" }
+                val hw = todayEvents.filter { it.kind == "homework" }
+                val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-        members.forEach { member ->
-            box.addView(TextView(this).apply {
-                text = "${member.icon} ${member.label}"
-                textSize = 18f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(member.color)
-                setPadding(0, dp(10), 0, dp(5))
-            })
-            val rows = todayEvents.filter { it.memberIds.contains(member.id) }
-            if (rows.isEmpty()) {
-                box.addView(TextView(this).apply {
-                    text = "오늘 일정 없음"
-                    setTextColor(0xFF64748B.toInt())
-                    setPadding(dp(8), dp(5), 0, dp(8))
-                })
-            } else {
-                rows.forEach { event ->
+                members.forEach { member ->
                     box.addView(TextView(this).apply {
-                        text = "${if (event.kind == "homework" || event.allDay) "종일" else event.start.drop(11).take(5)}   ${event.title}"
-                        textSize = 14f
-                        setPadding(dp(10), dp(9), dp(10), dp(9))
+                        text = "${member.icon} ${member.label}"
+                        textSize = 18f
+                        typeface = Typeface.DEFAULT_BOLD
+                        setTextColor(member.color)
+                        setPadding(0, dp(10), 0, dp(5))
+                    })
+                    val memberRows = todayEvents.filter { it.memberIds.contains(member.id) }
+                    if (memberRows.isEmpty()) {
+                        box.addView(TextView(this).apply {
+                            text = "오늘 일정 없음"
+                            setTextColor(0xFF64748B.toInt())
+                            setPadding(dp(8), dp(5), 0, dp(8))
+                        })
+                    } else {
+                        memberRows.forEach { event ->
+                            box.addView(TextView(this).apply {
+                                text = "${if (event.kind == "homework" || event.allDay) "종일" else event.start.drop(11).take(5)}   ${event.title}"
+                                textSize = 14f
+                                setPadding(dp(10), dp(9), dp(10), dp(9))
+                                background = rounded(0xFFF8FAFC.toInt(), 8f, 0xFFE2E8F0.toInt())
+                                setOnClickListener { showEventDetails(event) }
+                            }, matchWrap(bottom = 5))
+                        }
+                    }
+                }
+
+                box.addView(TextView(this).apply {
+                    text = "📝 오늘 숙제"
+                    textSize = 17f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setPadding(0, dp(14), 0, dp(5))
+                })
+                box.addView(TextView(this).apply {
+                    text = if (hw.isEmpty()) "없음" else "${hw.count { it.completed }}/${hw.size} 완료"
+                    textSize = 15f
+                    setPadding(dp(8), dp(6), 0, dp(10))
+                })
+
+                notices.firstOrNull()?.let { notice ->
+                    box.addView(TextView(this).apply {
+                        text = "📣 최근 가족 메모"
+                        textSize = 17f
+                        typeface = Typeface.DEFAULT_BOLD
+                        setPadding(0, dp(14), 0, dp(5))
+                    })
+                    box.addView(TextView(this).apply {
+                        text = buildString {
+                            append(notice.title)
+                            if (notice.body.isNotBlank()) append("\n${notice.body}")
+                        }
+                        setPadding(dp(10))
                         background = rounded(0xFFF8FAFC.toInt(), 8f, 0xFFE2E8F0.toInt())
-                        setOnClickListener { showEventDetails(event) }
-                    }, matchWrap(bottom = 5))
+                    })
+                }
+                showPanelDialog("📌 오늘", box)
+            }
+        }
+    }
+
+    private fun showStats() {
+        toast("통계를 불러오는 중…")
+        repo.loadAllEvents { result ->
+            runOnUiThread {
+                result.onFailure {
+                    toast("통계를 불러오지 못했습니다: ${it.message.orEmpty()}")
+                }.onSuccess { events ->
+                    val today = LocalDate.now()
+                    val todayKey = today.toString()
+                    val last30Start = today.minusDays(30).toString()
+                    val last30 = events.count { it.kind == "event" && it.date >= last30Start && it.date <= todayKey }
+                    val todayCount = events.count { it.date == todayKey && it.kind != "homework-complete" }
+                    val hw = events.filter { it.date == todayKey && it.kind == "homework" }
+                    val rate = if (hw.isEmpty()) 0 else (hw.count { it.completed } * 100 / hw.size)
+                    val completed = events.count { it.kind == "homework" && it.completed }
+
+                    val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                    listOf(
+                        "최근 30일 일정" to "${last30}개",
+                        "오늘 일정" to "${todayCount}개",
+                        "오늘 숙제 완료율" to "${rate}%",
+                        "누적 완료 숙제" to "${completed}개"
+                    ).forEach { (labelText, valueText) ->
+                        box.addView(LinearLayout(this).apply {
+                            gravity = Gravity.CENTER_VERTICAL
+                            setPadding(dp(14))
+                            background = rounded(0xFFF8FAFC.toInt(), 10f, 0xFFE2E8F0.toInt())
+                            addView(TextView(this@MainActivity).apply {
+                                text = labelText
+                                textSize = 15f
+                                setTextColor(0xFF475569.toInt())
+                            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                            addView(TextView(this@MainActivity).apply {
+                                text = valueText
+                                textSize = 22f
+                                typeface = Typeface.DEFAULT_BOLD
+                                setTextColor(0xFF1A73E8.toInt())
+                            })
+                        }, matchWrap(bottom = 8))
+                    }
+                    box.addView(TextView(this).apply {
+                        text = "구성원별 일정 수"
+                        textSize = 18f
+                        typeface = Typeface.DEFAULT_BOLD
+                        setPadding(0, dp(14), 0, dp(6))
+                    })
+                    members.forEach { m ->
+                        box.addView(LinearLayout(this).apply {
+                            gravity = Gravity.CENTER_VERTICAL
+                            setPadding(dp(10), dp(8), dp(10), dp(8))
+                            addView(TextView(this@MainActivity).apply {
+                                text = "${m.icon} ${m.label}"
+                                textSize = 15f
+                            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                            addView(TextView(this@MainActivity).apply {
+                                text = events.count { it.kind == "event" && it.memberIds.contains(m.id) }.toString()
+                                typeface = Typeface.DEFAULT_BOLD
+                            })
+                        })
+                    }
+                    showPanelDialog("📊 가족 통계", box)
                 }
             }
         }
-
-        box.addView(TextView(this).apply {
-            text = "📝 오늘 숙제"
-            textSize = 17f
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(14), 0, dp(5))
-        })
-        box.addView(TextView(this).apply {
-            text = if (hw.isEmpty()) "없음" else "${hw.count { it.completed }}/${hw.size} 완료"
-            textSize = 15f
-            setPadding(dp(8), dp(6), 0, dp(10))
-        })
-
-
-        notices.firstOrNull()?.let { notice ->
-            box.addView(TextView(this).apply {
-                text = "📣 최근 가족 메모"
-                textSize = 17f
-                typeface = Typeface.DEFAULT_BOLD
-                setPadding(0, dp(14), 0, dp(5))
-            })
-            box.addView(TextView(this).apply {
-                text = buildString {
-                    append(notice.title)
-                    if (notice.body.isNotBlank()) append("\n${notice.body}")
-                }
-                setPadding(dp(10))
-                background = rounded(0xFFF8FAFC.toInt(), 8f, 0xFFE2E8F0.toInt())
-            })
-        }
-        showPanelDialog("📌 오늘", box)
     }
-
-
-    private fun showStats() {
-        val today = LocalDate.now()
-        val todayKey = today.toString()
-        val last30Start = today.minusDays(30).toString()
-        val last30 = allEvents.count { it.kind == "event" && it.date >= last30Start && it.date <= todayKey }
-        val todayEvents = allEvents.count { it.date == todayKey && it.kind != "homework-complete" }
-        val hw = allEvents.filter { it.date == todayKey && it.kind == "homework" }
-        val rate = if (hw.isEmpty()) 0 else (hw.count { it.completed } * 100 / hw.size)
-        val completed = allEvents.count { it.kind == "homework" && it.completed }
-
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        listOf(
-            "최근 30일 일정" to "${last30}개",
-            "오늘 일정" to "${todayEvents}개",
-            "오늘 숙제 완료율" to "${rate}%",
-            "누적 완료 숙제" to "${completed}개"
-        ).forEach { (labelText, valueText) ->
-            box.addView(LinearLayout(this).apply {
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(14))
-                background = rounded(0xFFF8FAFC.toInt(), 10f, 0xFFE2E8F0.toInt())
-                addView(TextView(this@MainActivity).apply {
-                    text = labelText
-                    textSize = 15f
-                    setTextColor(0xFF475569.toInt())
-                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                addView(TextView(this@MainActivity).apply {
-                    text = valueText
-                    textSize = 22f
-                    typeface = Typeface.DEFAULT_BOLD
-                    setTextColor(0xFF1A73E8.toInt())
-                })
-            }, matchWrap(bottom = 8))
-        }
-        box.addView(TextView(this).apply {
-            text = "구성원별 일정 수"
-            textSize = 18f
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(14), 0, dp(6))
-        })
-        members.forEach { m ->
-            box.addView(LinearLayout(this).apply {
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(10), dp(8), dp(10), dp(8))
-                addView(TextView(this@MainActivity).apply {
-                    text = "${m.icon} ${m.label}"
-                    textSize = 15f
-                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                addView(TextView(this@MainActivity).apply {
-                    text = allEvents.count { it.kind == "event" && it.memberIds.contains(m.id) }.toString()
-                    typeface = Typeface.DEFAULT_BOLD
-                })
-            })
-        }
-        showPanelDialog("📊 가족 통계", box)
-    }
-
 
     private fun showNoticeInfo() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }

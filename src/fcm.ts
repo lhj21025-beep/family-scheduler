@@ -25,10 +25,12 @@ export async function registerPushForMember(memberId: 'me' | 'wife' | 'son') {
 
   const deviceKey = await tokenKey(token)
   await setDoc(doc(db, 'familyData', FAMILY_ID), {
-    [`pushTokens.${deviceKey}`]: {
-      token,
-      memberId,
-      updatedAt: new Date().toISOString(),
+    pushTokens: {
+      [deviceKey]: {
+        token,
+        memberId,
+        updatedAt: new Date().toISOString(),
+      },
     },
   }, { merge: true })
 

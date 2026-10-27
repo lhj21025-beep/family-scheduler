@@ -1410,7 +1410,12 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 1->requestNotificationPermission(showTestAfterGrant = true)
-                else->{repo.logout();showLogin()}
+                else->{
+                    AlarmScheduler.cancelAll(this)
+                    repo.close()
+                    repo.logout()
+                    showLogin()
+                }
             }
         }.setNegativeButton("닫기",null).show()
     }

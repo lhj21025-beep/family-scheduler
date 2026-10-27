@@ -285,19 +285,24 @@ class FamilyRepository {
                 val targetStartTime = newStart?.toLocalTime()
                 val targetDuration = if (newStart != null && newEnd != null) Duration.between(newStart, newEnd).toMinutes().coerceAtLeast(1) else null
 
-                val batch = db.batch()
-                var count = 0
-                candidates.forEach { (snapshot, candidate) ->
+                val updates = candidates.map { (snapshot, candidate) ->
                     val candidateStart = runCatching { LocalDateTime.parse(candidate.start) }.getOrNull()
-                    val candidateDate = candidateStart?.toLocalDate() ?: runCatching { LocalDate.parse(candidate.date) }.getOrNull()
+                    val candidateDate = candidateStart?.toLocalDate()
+                        ?: runCatching { LocalDate.parse(candidate.date) }.getOrNull()
                     val shiftedDate = candidateDate?.plusDays(dayShift) ?: candidateDate
-                    val shiftedStart = if (shiftedDate != null && targetStartTime != null) shiftedDate.atTime(targetStartTime) else candidateStart
-                    val shiftedEnd = if (shiftedStart != null && targetDuration != null) shiftedStart.plusMinutes(targetDuration) else candidate.end?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
+                    val shiftedStart =
+                        if (shiftedDate != null && targetStartTime != null) shiftedDate.atTime(targetStartTime)
+                        else candidateStart
+                    val shiftedEnd =
+                        if (shiftedStart != null && targetDuration != null) shiftedStart.plusMinutes(targetDuration)
+                        else candidate.end?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
 
                     val next = candidate.copy(
                         title = edited.title,
-                        start = shiftedStart?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")) ?: candidate.start,
-                        end = shiftedEnd?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")) ?: candidate.end,
+                        start = shiftedStart?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
+                            ?: candidate.start,
+                        end = shiftedEnd?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
+                            ?: candidate.end,
                         allDay = edited.allDay,
                         memberIds = edited.memberIds,
                         location = edited.location,
@@ -309,15 +314,36 @@ class FamilyRepository {
                         seriesRepeatUntil = edited.seriesRepeatUntil ?: original.seriesRepeatUntil ?: original.repeatUntil,
                         createdBy = candidate.createdBy ?: auth.currentUser?.uid,
                     )
-
-                    batch.update(snapshot.reference, "events.${safeKey(candidate.id)}", FieldValue.delete())
-                    val nextRef = db.collection("scheduleDays").document(next.date)
-                    batch.set(nextRef, mapOf("date" to next.date, "events" to mapOf(safeKey(next.id) to next.toMap())), SetOptions.merge())
-                    count++
+                    Triple(snapshot.reference, candidate, next)
                 }
-                batch.commit()
-                    .addOnSuccessListener { refreshWidgets(); done(Result.success(count)) }
-                    .addOnFailureListener { done(Result.failure(it)) }
+
+                fun commitChunk(startIndex: Int) {
+                    if (startIndex >= updates.size) {
+                        refreshWidgets()
+                        done(Result.success(updates.size))
+                        return
+                    }
+                    val batch = db.batch()
+                    updates.drop(startIndex).take(200).forEach { (oldRef, candidate, next) ->
+                        val key = safeKey(candidate.id)
+                        if (oldRef.id == next.date) {
+                            batch.update(oldRef, "events.$key", next.toMap())
+                        } else {
+                            batch.update(oldRef, "events.$key", FieldValue.delete())
+                            val nextRef = db.collection("scheduleDays").document(next.date)
+                            batch.set(
+                                nextRef,
+                                mapOf("date" to next.date, "events" to mapOf(safeKey(next.id) to next.toMap())),
+                                SetOptions.merge(),
+                            )
+                        }
+                    }
+                    batch.commit()
+                        .addOnSuccessListener { commitChunk(startIndex + 200) }
+                        .addOnFailureListener { done(Result.failure(it)) }
+                }
+
+                commitChunk(0)
             }
             .addOnFailureListener { done(Result.failure(it)) }
     }

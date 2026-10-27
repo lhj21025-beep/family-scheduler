@@ -159,12 +159,6 @@ class MainActivity : ComponentActivity() {
         repo.listenApprovals { rows -> runOnUiThread { approvals = rows } }
         requestNotificationPermission()
         repo.registerPushToken()
-        repo.cleanupEliTeacherPhone { result ->
-            runOnUiThread {
-                val removed = result.getOrDefault(0)
-                if (removed > 0) toast("엘리하이 담임선생님 전화 일정 ${removed}개를 삭제했습니다.")
-            }
-        }
         listenMonth()
     }
 

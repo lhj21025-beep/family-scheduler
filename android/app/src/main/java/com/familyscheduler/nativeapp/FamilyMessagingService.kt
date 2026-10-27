@@ -1,7 +1,11 @@
 package com.familyscheduler.nativeapp
 
+import android.Manifest
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.google.firebase.auth.FirebaseAuth
@@ -40,7 +44,9 @@ class FamilyMessagingService : FirebaseMessagingService() {
             .setAutoCancel(true)
             .setContentIntent(open)
             .build()
-        runCatching {
+        if (Build.VERSION.SDK_INT < 33 ||
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) {
             NotificationManagerCompat.from(this).notify(
                 (System.currentTimeMillis() and 0x7fffffff).toInt(),
                 notification,

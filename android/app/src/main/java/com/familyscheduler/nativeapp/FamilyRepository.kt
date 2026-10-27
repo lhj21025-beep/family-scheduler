@@ -155,15 +155,31 @@ class FamilyRepository {
 
     fun saveEvents(events: List<FamilyEvent>, done: (Result<Int>) -> Unit) {
         if (events.isEmpty()) return done(Result.success(0))
-        val batch = db.batch()
-        events.groupBy { it.date }.forEach { (date, dayEvents) ->
-            val values = dayEvents.associate { event ->
-                safeKey(event.id) to event.copy(createdBy = event.createdBy ?: auth.currentUser?.uid).toMap()
+        val groups = events.groupBy { it.date }.entries.toList()
+
+        fun commitChunk(startIndex: Int) {
+            if (startIndex >= groups.size) {
+                refreshWidgets()
+                done(Result.success(events.size))
+                return
             }
-            batch.set(db.collection("scheduleDays").document(date), mapOf("date" to date, "events" to values), SetOptions.merge())
+            val batch = db.batch()
+            groups.drop(startIndex).take(400).forEach { (date, dayEvents) ->
+                val values = dayEvents.associate { event ->
+                    safeKey(event.id) to event.copy(createdBy = event.createdBy ?: auth.currentUser?.uid).toMap()
+                }
+                batch.set(
+                    db.collection("scheduleDays").document(date),
+                    mapOf("date" to date, "events" to values),
+                    SetOptions.merge(),
+                )
+            }
+            batch.commit()
+                .addOnSuccessListener { commitChunk(startIndex + 400) }
+                .addOnFailureListener { done(Result.failure(it)) }
         }
-        batch.commit().addOnSuccessListener { refreshWidgets(); done(Result.success(events.size)) }
-            .addOnFailureListener { done(Result.failure(it)) }
+
+        commitChunk(0)
     }
 
     fun moveOrSaveEvent(old: FamilyEvent?, next: FamilyEvent, done: (Result<Unit>) -> Unit) {
@@ -233,22 +249,33 @@ class FamilyRepository {
         }
         db.collection("scheduleDays").get()
             .addOnSuccessListener { snapshots ->
-                val batch = db.batch()
-                var count = 0
-                snapshots.documents.forEach { snapshot ->
-                    parseEvents(snapshot).forEach { candidate ->
-                        val matches = sameEventSeries(candidate, event) &&
+                val deletions = snapshots.documents.flatMap { snapshot ->
+                    parseEvents(snapshot).filter { candidate ->
+                        sameEventSeries(candidate, event) &&
                             (mode != "future" || candidate.date >= event.date)
-                        if (matches) {
-                            batch.update(snapshot.reference, "events.${safeKey(candidate.id)}", FieldValue.delete())
-                            count++
-                        }
-                    }
+                    }.map { candidate -> snapshot.reference to safeKey(candidate.id) }
                 }
-                if (count == 0) return@addOnSuccessListener done(Result.failure(IllegalStateException("삭제할 반복 일정을 찾지 못했습니다.")))
-                batch.commit()
-                    .addOnSuccessListener { refreshWidgets(); done(Result.success(count)) }
-                    .addOnFailureListener { done(Result.failure(it)) }
+                if (deletions.isEmpty()) {
+                    done(Result.failure(IllegalStateException("삭제할 반복 일정을 찾지 못했습니다.")))
+                    return@addOnSuccessListener
+                }
+
+                fun commitChunk(startIndex: Int) {
+                    if (startIndex >= deletions.size) {
+                        refreshWidgets()
+                        done(Result.success(deletions.size))
+                        return
+                    }
+                    val batch = db.batch()
+                    deletions.drop(startIndex).take(400).forEach { (ref, key) ->
+                        batch.update(ref, "events.$key", FieldValue.delete())
+                    }
+                    batch.commit()
+                        .addOnSuccessListener { commitChunk(startIndex + 400) }
+                        .addOnFailureListener { done(Result.failure(it)) }
+                }
+
+                commitChunk(0)
             }
             .addOnFailureListener { done(Result.failure(it)) }
     }
@@ -448,13 +475,31 @@ class FamilyRepository {
             }
         }
         if (events.isEmpty()) return done(Result.success(0))
-        val batch = db.batch()
-        events.groupBy { it.date }.forEach { (date, dayEvents) ->
-            val values = dayEvents.associate { safeKey(it.id) to it.copy(createdBy = auth.currentUser?.uid).toMap() }
-            batch.set(db.collection("scheduleDays").document(date), mapOf("date" to date, "events" to values), SetOptions.merge())
+        val groups = events.groupBy { it.date }.entries.toList()
+
+        fun commitChunk(startIndex: Int) {
+            if (startIndex >= groups.size) {
+                refreshWidgets()
+                done(Result.success(events.size))
+                return
+            }
+            val batch = db.batch()
+            groups.drop(startIndex).take(400).forEach { (date, dayEvents) ->
+                val values = dayEvents.associate {
+                    safeKey(it.id) to it.copy(createdBy = auth.currentUser?.uid).toMap()
+                }
+                batch.set(
+                    db.collection("scheduleDays").document(date),
+                    mapOf("date" to date, "events" to values),
+                    SetOptions.merge(),
+                )
+            }
+            batch.commit()
+                .addOnSuccessListener { commitChunk(startIndex + 400) }
+                .addOnFailureListener { done(Result.failure(it)) }
         }
-        batch.commit().addOnSuccessListener { refreshWidgets(); done(Result.success(events.size)) }
-            .addOnFailureListener { done(Result.failure(it)) }
+
+        commitChunk(0)
     }
 
     fun requestHomeworkApproval(event: FamilyEvent, done: (Result<Unit>) -> Unit) {
@@ -569,11 +614,8 @@ class FamilyRepository {
     fun deleteHomeworkEvents(event: FamilyEvent, mode: String, done: (Result<Int>) -> Unit) {
         db.collection("scheduleDays").get()
             .addOnSuccessListener { snapshots ->
-                val batch = db.batch()
-                var count = 0
-                snapshots.documents.forEach { snapshot ->
-                    val ref = snapshot.reference
-                    parseEvents(snapshot).forEach { candidate ->
+                val deletions = snapshots.documents.flatMap { snapshot ->
+                    parseEvents(snapshot).filter { candidate ->
                         val sameSeries = candidate.kind == "homework" &&
                             candidate.homeworkId == event.homeworkId &&
                             if (!event.homeworkSeriesId.isNullOrBlank()) {
@@ -582,24 +624,34 @@ class FamilyRepository {
                                 candidate.homeworkStartDate == event.homeworkStartDate &&
                                     candidate.homeworkEndDate == event.homeworkEndDate
                             }
-                        val shouldDelete = sameSeries && when (mode) {
+                        sameSeries && when (mode) {
                             "one" -> candidate.id == event.id
                             "future" -> candidate.date >= event.date
                             else -> true
                         }
-                        if (shouldDelete) {
-                            batch.update(ref, "events.${safeKey(candidate.id)}", FieldValue.delete())
-                            count++
-                        }
-                    }
+                    }.map { candidate -> snapshot.reference to safeKey(candidate.id) }
                 }
-                if (count == 0) {
+                if (deletions.isEmpty()) {
                     done(Result.failure(IllegalStateException("삭제할 숙제 데이터를 찾지 못했습니다.")))
-                } else {
+                    return@addOnSuccessListener
+                }
+
+                fun commitChunk(startIndex: Int) {
+                    if (startIndex >= deletions.size) {
+                        refreshWidgets()
+                        done(Result.success(deletions.size))
+                        return
+                    }
+                    val batch = db.batch()
+                    deletions.drop(startIndex).take(400).forEach { (ref, key) ->
+                        batch.update(ref, "events.$key", FieldValue.delete())
+                    }
                     batch.commit()
-                        .addOnSuccessListener { refreshWidgets(); done(Result.success(count)) }
+                        .addOnSuccessListener { commitChunk(startIndex + 400) }
                         .addOnFailureListener { done(Result.failure(it)) }
                 }
+
+                commitChunk(0)
             }
             .addOnFailureListener { done(Result.failure(it)) }
     }

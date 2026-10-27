@@ -441,6 +441,8 @@ class MainActivity : ComponentActivity() {
                         append("\n부모 승인: ${formatStoredTimestamp(event.approvedAt)} · ${memberName(event.approvedBy)}")
                     }
                 }
+            } else if (event.googleImported) {
+                append("\n\nGoogle Calendar에서 가져온 일정입니다. 수정·삭제는 Google Calendar에서 해주세요.")
             } else if (repeated) {
                 append("\n\n반복 일정")
             }
@@ -470,9 +472,11 @@ class MainActivity : ComponentActivity() {
                 }.setNeutralButton("삭제") { _, _ -> showHomeworkDeleteOptions(event) }
             }
             "event" -> {
-                dialog.setPositiveButton("수정") { _, _ -> showEventEditor(event, repeated) }
-                dialog.setNeutralButton("삭제") { _, _ ->
-                    if (repeated) showEventDeleteOptions(event) else confirmDelete(event)
+                if (!event.googleImported) {
+                    dialog.setPositiveButton("수정") { _, _ -> showEventEditor(event, repeated) }
+                    dialog.setNeutralButton("삭제") { _, _ ->
+                        if (repeated) showEventDeleteOptions(event) else confirmDelete(event)
+                    }
                 }
             }
         }

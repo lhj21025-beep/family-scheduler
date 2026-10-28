@@ -26,7 +26,7 @@ type EventItem = {
   completedAt?: string
   completedBy?: MemberId
 }
-type PushToken = { token: string; memberId: MemberId; updatedAt?: string }
+type PushToken = { token: string; memberId: MemberId; platform?: 'web' | 'android'; updatedAt?: string }
 
 type FamilyData = {
   pushTokens?: Record<string, PushToken>
@@ -120,11 +120,12 @@ export const sendScheduleReminders = onSchedule(
       if (event.kind === 'homework-complete' || !event.alarmMinutes?.length || !event.memberIds?.length) continue
       for (const alarmMinutes of event.alarmMinutes) {
         if (eventAlarmTarget(event.start, alarmMinutes) !== nowMinute) continue
-        const key = sentKey(event.id, alarmMinutes)
-        if (sentAlarms[key]) continue
-
-        const recipients = pushTokens.filter(t => event.memberIds.includes(t.memberId))
+        const recipients = pushTokens.filter(
+          t => event.memberIds.includes(t.memberId) && t.platform !== 'android',
+        )
         for (const recipient of recipients) {
+          const key = `${sentKey(event.id, alarmMinutes)}_${recipient.memberId}`
+          if (sentAlarms[key]) continue
           messages.push({
             token: recipient.token,
             title: `📅 ${event.title}`,

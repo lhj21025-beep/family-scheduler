@@ -12,14 +12,14 @@ const FAMILY_ID = 'family-main'
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000
 
 type MemberId = 'me' | 'wife' | 'son'
-type Alarm = 5 | 10 | 30 | 60
+type Alarm = 0 | 5 | 10 | 30 | 60
 type EventItem = {
   id: string
   title: string
   start: string
   end?: string
   memberIds: MemberId[]
-  kind?: 'event' | 'homework' | 'homework-complete'
+  kind?: 'event' | 'homework' | 'homework-complete' | 'approval-alert'
   location?: string
   alarmMinutes?: Alarm[]
   completed?: boolean

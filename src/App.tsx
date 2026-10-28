@@ -173,11 +173,15 @@ const nextRepeatDate = (d: Date, repeat: Repeat, anchorDay = d.getDate(), altern
 const repeatDates = (start: string, repeat: Repeat, count = 1, until?: string, alternate = false) => {
   if (repeat === "none") return [start];
   const total = clampRepeatCount(count);
-  const out: string[] = [start];
-  let d = new Date(start);
-  const anchorDay = d.getDate();
+  const anchor = new Date(start);
+  let d = new Date(anchor);
+  const anchorDay = anchor.getDate();
+  if (alternate && repeat === "weekdays" && (d.getDay() === 0 || d.getDay() === 6))
+    d = nextRepeatDate(d, repeat, anchorDay, alternate, anchor);
+  if (until && dateKey(d) > until) return [];
+  const out: string[] = [d.getTime() === anchor.getTime() ? start : dateTime(d)];
   while (out.length < (until ? 365 : total)) {
-    d = nextRepeatDate(d, repeat, anchorDay, alternate, new Date(out[0]));
+    d = nextRepeatDate(d, repeat, anchorDay, alternate, anchor);
     if (until && dateKey(d) > until) break;
     out.push(dateTime(d));
   }
@@ -186,11 +190,14 @@ const repeatDates = (start: string, repeat: Repeat, count = 1, until?: string, a
 const homeworkRepeatDates = (startDate: string, repeat: Repeat, count = 1, alternate = false) => {
   if (repeat === "none") return [startDate];
   const total = clampRepeatCount(count);
-  const out: string[] = [startDate];
-  let d = new Date(`${startDate}T12:00:00`);
-  const anchorDay = d.getDate();
+  const anchor = new Date(`${startDate}T12:00:00`);
+  let d = new Date(anchor);
+  const anchorDay = anchor.getDate();
+  if (alternate && repeat === "weekdays" && (d.getDay() === 0 || d.getDay() === 6))
+    d = nextRepeatDate(d, repeat, anchorDay, alternate, anchor);
+  const out: string[] = [dateKey(d)];
   while (out.length < total) {
-    d = nextRepeatDate(d, repeat, anchorDay, alternate, new Date(out[0]));
+    d = nextRepeatDate(d, repeat, anchorDay, alternate, anchor);
     out.push(dateKey(d));
   }
   return out;

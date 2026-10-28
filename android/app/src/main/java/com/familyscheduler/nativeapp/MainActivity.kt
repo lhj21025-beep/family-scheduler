@@ -825,7 +825,7 @@ class MainActivity : ComponentActivity() {
                     val occurrenceDates =
                         if (repeat == "lunarYearly" && lunar != null) lunarRepeatStarts(chosenDate, lunar, count, until)
                         else repeatStarts(chosenDate, repeat, count, until)
-                    val seriesId = if (repeat == "none") null else newId()
+                    val seriesId = newId()
                     val events = occurrenceDates.mapIndexed { index, day ->
                         FamilyEvent(
                             id = newId(),

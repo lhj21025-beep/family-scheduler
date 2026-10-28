@@ -119,9 +119,14 @@ export async function syncGoogleFamilyCalendar(): Promise<SyncResult> {
       ) continue;
       const start = e.start.date ? `${e.start.date}T00:00` : localTime(e.start.dateTime!);
       const end = e.end?.date ? `${e.end.date}T00:00` : e.end?.dateTime ? localTime(e.end.dateTime) : undefined;
-      const id = "gcal_" + await digest(cal.id + ":" + e.id);
+      const title = e.summary.split(KEYWORD).join("").trim();
+      const stableFields = [
+        title, start, end ?? "", String(!!e.start.date),
+        e.location ?? "", e.description ?? "",
+      ].join("\u001f");
+      const id = "gcal_" + await digest(stableFields);
       const value: Record<string, unknown> = {
-        id, title: e.summary.split(KEYWORD).join("").trim(), start, allDay: !!e.start.date,
+        id, title, start, allDay: !!e.start.date,
         memberIds: ["me"], kind: "event", repeat: "none", familyId: FAMILY_ID,
         googleImported: true, googleCalendarId: cal.id, googleEventId: e.id,
         createdBy: auth.currentUser.uid,
@@ -129,7 +134,7 @@ export async function syncGoogleFamilyCalendar(): Promise<SyncResult> {
       if (end) value.end = end;
       if (e.location) value.location = e.location;
       if (e.description) value.memo = e.description;
-      const fingerprint = JSON.stringify(value);
+      const fingerprint = await digest(stableFields);
       fresh.set(id, { day: start.slice(0, 10), fingerprint, event: value });
     }
   }

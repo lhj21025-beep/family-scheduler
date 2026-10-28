@@ -41,7 +41,8 @@ class TodayWidgetProvider : AppWidgetProvider() {
                 return
             }
             FamilyRepository().loadToday { events ->
-                val text = if (events.isEmpty()) "오늘 등록된 일정이 없습니다." else events.take(6).joinToString("\n") { event ->
+                val visibleEvents = events.filter { it.kind != "homework-complete" }
+                val text = if (visibleEvents.isEmpty()) "오늘 등록된 일정이 없습니다." else visibleEvents.take(6).joinToString("\n") { event ->
                     val member = members.firstOrNull { it.id == event.memberIds.firstOrNull() }
                     val time = if (event.allDay) "종일" else event.start.drop(11).take(5)
                     "${member?.icon ?: "•"} $time  ${event.title}"

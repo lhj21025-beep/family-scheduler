@@ -269,7 +269,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun moveEventFromCalendar(event: FamilyEvent, nextStart: LocalDateTime) {
-        if (event.kind != "event") return
+        if (event.kind != "event" || event.googleImported) return
         val oldStart = runCatching { LocalDateTime.parse(event.start) }.getOrNull() ?: return
         val oldEnd = event.end?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
         val duration = oldEnd?.let { Duration.between(oldStart, it).toMinutes().coerceAtLeast(1) } ?: 60L
@@ -289,7 +289,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun resizeEventFromCalendar(event: FamilyEvent, durationMinutes: Long) {
-        if (event.kind != "event") return
+        if (event.kind != "event" || event.googleImported) return
         val start = runCatching { LocalDateTime.parse(event.start) }.getOrNull() ?: return
         val next = event.copy(
             end = start.plusMinutes(durationMinutes.coerceAtLeast(30))

@@ -30,3 +30,13 @@
 .top-actions .spelling-top-icon { min-width: 38px; width: 38px; flex: 0 0 38px; padding: 5px; font-size: 19px; line-height: 1.1; text-align: center; }
 
 .spelling-context-help{display:block;font-size:13px;color:#667085;font-weight:500;margin-bottom:7px}
+
+.spelling-view-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:14px 0 10px}
+.spelling-view-tabs button{border:1px solid #d0d5dd;background:#fff;color:#475467;border-radius:9px;padding:9px 6px;font-weight:700;cursor:pointer}
+.spelling-view-tabs button.active{background:#eff6ff;border-color:#2563eb;color:#1d4ed8}
+.spelling-day-list{display:flex;gap:7px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:thin}
+.spelling-day-list>span{color:#667085;font-size:13px;padding:8px 2px}
+.spelling-day-list button{flex:0 0 auto;min-width:104px;border:1px solid #d0d5dd;background:#fff;border-radius:9px;padding:8px 10px;text-align:left;cursor:pointer;color:#344054}
+.spelling-day-list button.active{background:#eff6ff;border-color:#2563eb;color:#1d4ed8}
+.spelling-day-list button b,.spelling-day-list button small{display:block}
+.spelling-day-list button small{margin-top:3px;color:#667085}

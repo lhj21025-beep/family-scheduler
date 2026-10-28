@@ -123,6 +123,7 @@ class FamilyRepository {
             val value = mapOf(
                 "token" to token,
                 "memberId" to signedMember(),
+                "platform" to "android",
                 "updatedAt" to nowIso(),
             )
             db.collection("familyData").document("family-main")
@@ -504,47 +505,61 @@ class FamilyRepository {
 
     fun requestHomeworkApproval(event: FamilyEvent, done: (Result<Unit>) -> Unit) {
         val familyRef = db.collection("familyData").document("family-main")
-        familyRef.get().addOnSuccessListener { snapshot ->
+        val request = HomeworkApproval(
+            eventId = event.id,
+            homeworkId = event.homeworkId,
+            homeworkSeriesId = event.homeworkSeriesId,
+            homeworkStartDate = event.homeworkStartDate,
+            homeworkEndDate = event.homeworkEndDate,
+            title = cleanHomeworkTitle(event.title),
+            targetDate = event.date,
+            requestedBy = signedMember(),
+        )
+        val pushAt = LocalDateTime.now().plusMinutes(1)
+        val alert = FamilyEvent(
+            id = "approval_alert_${request.id}",
+            title = "✅ 부모 확인 필요 · ${request.title}",
+            start = pushAt.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")),
+            end = pushAt.plusMinutes(5).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")),
+            memberIds = listOf("me", "wife"),
+            kind = "approval-alert",
+            memo = "강천이 ${request.targetDate} 숙제를 미리 완료하려고 합니다. 앱에서 승인 또는 거절해 주세요.",
+            alarmMinutes = listOf(0),
+            createdBy = auth.currentUser?.uid,
+        )
+        val alertRef = db.collection("scheduleDays").document(alert.date)
+
+        db.runTransaction { transaction ->
+            val snapshot = transaction.get(familyRef)
             val approvals = snapshot.get("approvalRequests") as? Map<*, *>
             val duplicatePending = approvals?.values?.any { value ->
                 val map = value as? Map<*, *> ?: return@any false
-                map["status"] == "pending" && map["eventId"] == event.id
+                if (map["status"] != "pending") return@any false
+                val sameEvent = map["eventId"] == event.id
+                val sameBlock =
+                    !event.homeworkSeriesId.isNullOrBlank() &&
+                        map["homeworkSeriesId"] == event.homeworkSeriesId &&
+                        map["homeworkId"] == event.homeworkId &&
+                        map["homeworkStartDate"] == event.homeworkStartDate &&
+                        map["homeworkEndDate"] == event.homeworkEndDate
+                sameEvent || sameBlock
             } == true
-            if (duplicatePending) {
-                done(Result.failure(IllegalStateException("이미 부모 확인을 요청한 숙제입니다.")))
-                return@addOnSuccessListener
-            }
+            if (duplicatePending) error("이미 부모 확인을 요청한 숙제입니다.")
 
-            val request = HomeworkApproval(
-                eventId = event.id,
-                homeworkId = event.homeworkId,
-                homeworkSeriesId = event.homeworkSeriesId,
-                homeworkStartDate = event.homeworkStartDate,
-                homeworkEndDate = event.homeworkEndDate,
-                title = cleanHomeworkTitle(event.title),
-                targetDate = event.date,
-                requestedBy = signedMember(),
-            )
-            familyRef.set(
+            transaction.set(
+                familyRef,
                 mapOf("approvalRequests" to mapOf(request.id to request.toMap())),
-                SetOptions.merge()
-            ).addOnSuccessListener {
-                val pushAt = LocalDateTime.now().plusMinutes(1)
-                val alert = FamilyEvent(
-                    id = "approval_alert_${request.id}",
-                    title = "✅ 부모 확인 필요 · ${request.title}",
-                    start = pushAt.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")),
-                    end = pushAt.plusMinutes(5).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")),
-                    memberIds = listOf("me", "wife"),
-                    kind = "approval-alert",
-                    memo = "강천이 ${request.targetDate} 숙제를 미리 완료하려고 합니다. 앱에서 승인 또는 거절해 주세요.",
-                    alarmMinutes = listOf(0),
-                )
-                saveEvent(alert) { saved ->
-                    if (saved.isSuccess) done(Result.success(Unit))
-                    else done(Result.failure(saved.exceptionOrNull() ?: Exception("알림 저장 실패")))
-                }
-            }.addOnFailureListener { done(Result.failure(it)) }
+                SetOptions.merge(),
+            )
+            transaction.set(
+                alertRef,
+                mapOf("date" to alert.date, "events" to mapOf(safeKey(alert.id) to alert.toMap())),
+                SetOptions.merge(),
+            )
+            Unit
+        }.addOnSuccessListener {
+            refreshWidgets()
+            done(Result.success(Unit))
         }.addOnFailureListener { done(Result.failure(it)) }
     }
 
@@ -668,14 +683,21 @@ class FamilyRepository {
                 val completionTime = nowIso()
                 snapshots.forEachIndexed { index, snapshot ->
                     parseEvents(snapshot).filter { candidate ->
-                        candidate.kind == "homework" && (
-                            candidate.id == event.id ||
-                            (!event.homeworkSeriesId.isNullOrBlank() &&
+                        val sameSeriesBlock =
+                            !event.homeworkSeriesId.isNullOrBlank() &&
                                 candidate.homeworkSeriesId == event.homeworkSeriesId &&
                                 candidate.homeworkId == event.homeworkId &&
                                 candidate.homeworkStartDate == event.homeworkStartDate &&
-                                candidate.homeworkEndDate == event.homeworkEndDate)
-                        )
+                                candidate.homeworkEndDate == event.homeworkEndDate
+                        val sameLegacyBlock =
+                            event.homeworkSeriesId.isNullOrBlank() &&
+                                candidate.homeworkSeriesId.isNullOrBlank() &&
+                                !event.homeworkStartDate.isNullOrBlank() &&
+                                candidate.homeworkId == event.homeworkId &&
+                                candidate.homeworkStartDate == event.homeworkStartDate &&
+                                candidate.homeworkEndDate == event.homeworkEndDate
+                        candidate.kind == "homework" &&
+                            (candidate.id == event.id || sameSeriesBlock || sameLegacyBlock)
                     }.forEach { candidate ->
                         val next = candidate.copy(
                             title = (if (completed) "✅ " else "📝 ") + cleanHomeworkTitle(candidate.title),

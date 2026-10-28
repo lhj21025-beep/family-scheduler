@@ -214,9 +214,10 @@ export const notifyDailyHomeworkComplete = onDocumentUpdated(
 
     const latestHomework = [...homeworks]
       .sort((a, b) => completionEpoch(b.completedAt) - completionEpoch(a.completedAt))[0]
+    const allCompletedBySon = homeworks.every(item => item.completedBy === 'son')
     if (
-      latestHomework?.completedBy !== 'son' ||
-      completionKstDate(latestHomework.completedAt) !== today
+      !allCompletedBySon ||
+      completionKstDate(latestHomework?.completedAt) !== today
     ) return
 
     const familySnap = await db.collection('familyData').doc(FAMILY_ID).get()

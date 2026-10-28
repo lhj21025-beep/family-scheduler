@@ -68,4 +68,27 @@ class ModelsTest {
         assertTrue(restored?.completed == true)
         assertFalse(restored?.completedAt.isNullOrBlank())
     }
+
+    @Test
+    fun alternate_recurrence_matches_calendar_weeks_and_months() {
+        val start = LocalDate.of(2026, 10, 28)
+        fun dates(mode: String, count: Int, from: LocalDate = start, until: LocalDate? = null) =
+            repeatStarts(from, mode, count, until, alternate = true).map { it.toString() }
+        assertEquals(listOf("2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31", "2026-11-08"), dates("daily", 5))
+        assertEquals(listOf("2026-10-28", "2026-10-29", "2026-10-30", "2026-11-09", "2026-11-10"), dates("weekdays", 5))
+        assertEquals(listOf("2026-10-28", "2026-11-11", "2026-11-25"), dates("weekly", 3))
+        assertEquals(listOf("2026-10-28", "2026-12-28", "2027-02-28"), dates("monthly", 3))
+        assertEquals(listOf("2026-12-31", "2027-02-28", "2027-04-30"), dates("monthly", 3, LocalDate.of(2026, 12, 31)))
+        assertEquals(listOf("2026-11-09", "2026-11-10"), dates("weekdays", 2, LocalDate.of(2026, 10, 31)))
+        assertEquals(listOf("2026-11-02", "2026-11-03"), dates("weekdays", 2, LocalDate.of(2026, 11, 1)))
+        assertEquals(4, dates("daily", 365, until = LocalDate.of(2026, 11, 7)).size)
+        assertEquals(365, dates("daily", 365).size)
+    }
+
+    @Test
+    fun alternate_setting_survives_storage_and_legacy_defaults() {
+        val event = FamilyEvent(start = "2026-10-28T09:00:00", alternateRepeat = true)
+        assertTrue(FamilyEvent.fromMap(event.toMap())?.alternateRepeat == true)
+        assertFalse(FamilyEvent.fromMap(event.toMap() - "alternateRepeat")!!.alternateRepeat)
+    }
 }

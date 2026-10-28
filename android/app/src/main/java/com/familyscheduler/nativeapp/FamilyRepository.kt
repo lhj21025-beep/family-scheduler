@@ -415,11 +415,11 @@ class FamilyRepository {
 
     fun checkHomeworkDuplicates(
         selected: List<Homework>, start: LocalDate, end: LocalDate,
-        repeat: String, repeatCount: Int, done: (Result<List<Pair<String, String>>>) -> Unit
+        repeat: String, repeatCount: Int, alternateRepeat: Boolean = false, done: (Result<List<Pair<String, String>>>) -> Unit
     ) {
         val blockLength = java.time.temporal.ChronoUnit.DAYS.between(start, end)
         val proposed = selected.flatMap { homework ->
-            repeatStarts(start, repeat, if (repeat == "none") 1 else repeatCount).flatMap { occurrenceStart ->
+            repeatStarts(start, repeat, if (repeat == "none") 1 else repeatCount, alternate = alternateRepeat).flatMap { occurrenceStart ->
                 val occurrenceEnd = occurrenceStart.plusDays(blockLength)
                 datesBetween(occurrenceStart, occurrenceEnd).map { day ->
                     Triple(day.toString(), homework.id, homework.name.trim())
@@ -466,12 +466,12 @@ class FamilyRepository {
 
     fun registerHomework(
         selected: List<Homework>, start: LocalDate, end: LocalDate,
-        repeat: String, repeatCount: Int, done: (Result<Int>) -> Unit
+        repeat: String, repeatCount: Int, alternateRepeat: Boolean = false, done: (Result<Int>) -> Unit
     ) {
         val blockLength = java.time.temporal.ChronoUnit.DAYS.between(start, end)
         val events = selected.flatMap { homework ->
             val seriesId = newId()
-            repeatStarts(start, repeat, if (repeat == "none") 1 else repeatCount).flatMap { occurrenceStart ->
+            repeatStarts(start, repeat, if (repeat == "none") 1 else repeatCount, alternate = alternateRepeat).flatMap { occurrenceStart ->
                 val occurrenceEnd = occurrenceStart.plusDays(blockLength)
                 datesBetween(occurrenceStart, occurrenceEnd).map { day ->
                     FamilyEvent(
@@ -479,7 +479,7 @@ class FamilyRepository {
                         allDay = true, memberIds = listOf("son"), kind = "homework",
                         homeworkId = homework.id, homeworkSeriesId = seriesId,
                         homeworkStartDate = occurrenceStart.toString(), homeworkEndDate = occurrenceEnd.toString(),
-                        repeat = repeat, repeatCount = repeatCount
+                        repeat = repeat, repeatCount = repeatCount, alternateRepeat = alternateRepeat && repeat != "none"
                     )
                 }
             }

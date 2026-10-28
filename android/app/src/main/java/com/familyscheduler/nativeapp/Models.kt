@@ -30,6 +30,7 @@ data class FamilyEvent(
     val memo: String? = null,
     val repeat: String = "none",
     val repeatCount: Int = 1,
+    val alternateRepeat: Boolean = false,
     val repeatEndMode: String = "count",
     val repeatUntil: String? = null,
     val calendarType: String = "solar",
@@ -65,6 +66,7 @@ data class FamilyEvent(
         location?.takeIf { it.isNotBlank() }?.let { put("location", it) }
         memo?.takeIf { it.isNotBlank() }?.let { put("memo", it) }
         put("repeat", repeat); put("repeatCount", repeatCount)
+        put("alternateRepeat", alternateRepeat)
         put("repeatEndMode", repeatEndMode)
         repeatUntil?.let { put("repeatUntil", it) }
         put("calendarType", calendarType)
@@ -107,6 +109,7 @@ data class FamilyEvent(
                 memo = data["memo"] as? String,
                 repeat = data["repeat"] as? String ?: "none",
                 repeatCount = (data["repeatCount"] as? Number)?.toInt() ?: 1,
+                alternateRepeat = data["alternateRepeat"] as? Boolean ?: false,
                 repeatEndMode = data["repeatEndMode"] as? String ?: "count",
                 repeatUntil = data["repeatUntil"] as? String,
                 calendarType = data["calendarType"] as? String ?: "solar",
@@ -233,18 +236,34 @@ fun cleanHomeworkTitle(title: String): String = title
 fun datesBetween(start: LocalDate, end: LocalDate): List<LocalDate> =
     generateSequence(start) { it.plusDays(1) }.takeWhile { !it.isAfter(end) }.take(366).toList()
 
-fun repeatStarts(start: LocalDate, repeat: String, count: Int, until: LocalDate? = null): List<LocalDate> {
+fun alternateRepeatLabel(repeat: String): String = when (repeat) {
+    "monthly" -> "격주 · 한 달 건너 같은 날짜"
+    "weekly" -> "격주 · 한 주 건너 같은 요일"
+    "weekdays" -> "격주 · 한 주 건너 월~금"
+    else -> "격주 · 한 주 건너 일~토"
+}
+
+fun repeatStarts(start: LocalDate, repeat: String, count: Int, until: LocalDate? = null, alternate: Boolean = false): List<LocalDate> {
     if (repeat == "none") return listOf(start)
-    val result = mutableListOf(start)
+    val sunday = start.minusDays((start.dayOfWeek.value % 7).toLong())
+    fun allowed(date: LocalDate): Boolean {
+        val activeWeek = !alternate || java.time.temporal.ChronoUnit.DAYS.between(sunday, date) / 7 % 2 == 0L
+        return activeWeek && (repeat != "weekdays" || date.dayOfWeek.value in 1..5)
+    }
     var date = start
+    if (alternate && repeat == "weekdays") {
+        while (!allowed(date)) date = date.plusDays(1)
+    }
+    if (until != null && date.isAfter(until)) return emptyList()
+    val result = mutableListOf(date)
     while (result.size < if (until == null) count.coerceIn(1, 365) else 365) {
         date = when (repeat) {
-            "daily" -> date.plusDays(1)
-            "weekdays" -> generateSequence(date.plusDays(1)) { it.plusDays(1) }
-                .first { it.dayOfWeek.value in 1..5 }
-            "weekly" -> date.plusWeeks(1)
-            "monthly" -> date.plusMonths(1).withDayOfMonth(start.dayOfMonth.coerceAtMost(date.plusMonths(1).lengthOfMonth()))
-            else -> date
+            "daily", "weekdays" -> generateSequence(date.plusDays(1)) { it.plusDays(1) }.first { allowed(it) }
+            "weekly" -> date.plusWeeks(if (alternate) 2 else 1)
+            "monthly" -> date.plusMonths(if (alternate) 2 else 1).let {
+                it.withDayOfMonth(start.dayOfMonth.coerceAtMost(it.lengthOfMonth()))
+            }
+            else -> return result
         }
         if (until != null && date.isAfter(until)) break
         result += date

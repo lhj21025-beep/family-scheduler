@@ -697,6 +697,10 @@ class MainActivity : ComponentActivity() {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, repeatLabels)
             setSelection(repeatCodes.indexOf(currentRepeat).coerceAtLeast(0))
         }
+        val alternateRepeat = CheckBox(this).apply {
+            isChecked = existing?.alternateRepeat ?: false
+            isEnabled = existing == null
+        }
         val repeatEndMode = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("횟수", "날짜까지"))
             setSelection(if ((existing?.repeatEndMode ?: "count") == "date") 1 else 0)
@@ -713,7 +717,7 @@ class MainActivity : ComponentActivity() {
         val repeatUntil = edit("반복 종료일 📅", initialUntil, false).apply { setOnClickListener { pickDate(this) } }
         val lunarSummary = TextView(this).apply { setTextColor(0xFF64748B.toInt()); setPadding(0, dp(6), 0, dp(6)) }
 
-        box.addView(label("반복")); box.addView(repeatSpinner)
+        box.addView(label("반복")); box.addView(repeatSpinner); box.addView(alternateRepeat)
         box.addView(label("반복 종료 방식")); box.addView(repeatEndMode)
         box.addView(label("반복 횟수")); box.addView(repeatCountPreset); box.addView(repeatCount)
         box.addView(repeatUntil); box.addView(lunarSummary)
@@ -728,6 +732,10 @@ class MainActivity : ComponentActivity() {
 
         fun updateRepeatVisibility() {
             val repeatEnabled = repeatSpinner.selectedItemPosition != 0
+            val alternateEnabled = repeatSpinner.selectedItemPosition in 1..4
+            alternateRepeat.visibility = if (alternateEnabled) View.VISIBLE else View.GONE
+            alternateRepeat.text = alternateRepeatLabel(repeatCodes[repeatSpinner.selectedItemPosition])
+            if (!alternateEnabled) alternateRepeat.isChecked = false
             repeatEndMode.isEnabled = repeatEnabled
             repeatCountPreset.visibility = if (repeatEnabled && repeatEndMode.selectedItemPosition == 0) View.VISIBLE else View.GONE
             repeatCount.visibility = if (repeatEnabled && repeatEndMode.selectedItemPosition == 0) View.VISIBLE else View.GONE
@@ -808,6 +816,7 @@ class MainActivity : ComponentActivity() {
                         seriesRepeatCount = existing.seriesRepeatCount,
                         seriesRepeatUntil = existing.seriesRepeatUntil,
                         repeat = existing.repeat,
+                        alternateRepeat = existing.alternateRepeat,
                         repeatCount = existing.repeatCount,
                         repeatEndMode = existing.repeatEndMode,
                         repeatUntil = existing.repeatUntil,
@@ -852,7 +861,7 @@ class MainActivity : ComponentActivity() {
                 } else {
                     val occurrenceDates =
                         if (repeat == "lunarYearly" && lunar != null) lunarRepeatStarts(chosenDate, lunar, count, until)
-                        else repeatStarts(chosenDate, repeat, count, until)
+                        else repeatStarts(chosenDate, repeat, count, until, alternateRepeat.isChecked)
                     val seriesId = newId()
                     val events = occurrenceDates.mapIndexed { index, day ->
                         FamilyEvent(
@@ -869,6 +878,7 @@ class MainActivity : ComponentActivity() {
                             seriesRepeat = if (repeat == "none") null else repeat,
                             seriesRepeatCount = if (repeat == "none") null else count,
                             seriesRepeatUntil = until?.toString(),
+                            alternateRepeat = alternateRepeat.isChecked && repeat in listOf("daily", "weekdays", "weekly", "monthly"),
                             repeat = if (index == 0) repeat else "none",
                             repeatCount = if (index == 0) count else 1,
                             repeatEndMode = if (index == 0 && until != null) "date" else "count",
@@ -920,6 +930,8 @@ class MainActivity : ComponentActivity() {
         }
         val count = edit("횟수 직접 입력", "1").apply { inputType = InputType.TYPE_CLASS_NUMBER }
         box.addView(label("반복")); box.addView(repeat)
+        val alternateRepeat = CheckBox(this).apply { text = alternateRepeatLabel("daily"); visibility = View.GONE }
+        box.addView(alternateRepeat)
         box.addView(label("반복 횟수")); box.addView(countPreset); box.addView(count)
 
         val hint = TextView(this).apply {
@@ -971,6 +983,9 @@ class MainActivity : ComponentActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val enabled = position != 0
+                alternateRepeat.visibility = if (enabled) View.VISIBLE else View.GONE
+                alternateRepeat.text = alternateRepeatLabel(listOf("none", "daily", "weekdays", "weekly", "monthly")[position])
+                if (!enabled) alternateRepeat.isChecked = false
                 countPreset.isEnabled = enabled
                 count.isEnabled = enabled
                 if (!enabled) count.setText("1") else if ((count.text.toString().toIntOrNull() ?: 1) < 2) count.setText("2")
@@ -1005,7 +1020,7 @@ class MainActivity : ComponentActivity() {
                 val total = count.text.toString().toIntOrNull()?.coerceIn(1, 365) ?: 1
 
                 alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                repo.checkHomeworkDuplicates(resolvedSelected, startDate, endDate, repeatCode, total) { duplicateResult ->
+                repo.checkHomeworkDuplicates(resolvedSelected, startDate, endDate, repeatCode, total, alternateRepeat.isChecked) { duplicateResult ->
                     runOnUiThread {
                         if (duplicateResult.isFailure) {
                             alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
@@ -1014,7 +1029,7 @@ class MainActivity : ComponentActivity() {
                         }
                         val duplicates = duplicateResult.getOrDefault(emptyList())
                         val registerNow = {
-                            repo.registerHomework(resolvedSelected, startDate, endDate, repeatCode, total) { result ->
+                            repo.registerHomework(resolvedSelected, startDate, endDate, repeatCode, total, alternateRepeat.isChecked) { result ->
                                 runOnUiThread {
                                     if (result.isSuccess) {
                                         alert.dismiss()
@@ -1123,6 +1138,8 @@ class MainActivity : ComponentActivity() {
         box.addView(start); box.addView(end)
         val repeat = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("반복 안 함", "매일", "평일", "매주", "매월")) }
         box.addView(label("반복")); box.addView(repeat)
+        val alternateRepeat = CheckBox(this).apply { text = alternateRepeatLabel("daily"); visibility = View.GONE }
+        box.addView(alternateRepeat)
         box.addView(label("반복 횟수"))
         val countPresetValues = listOf(2, 3, 5, 10, 20, 30, 60)
         val countPreset = Spinner(this).apply {
@@ -1139,6 +1156,9 @@ class MainActivity : ComponentActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val enabled = position != 0
+                alternateRepeat.visibility = if (enabled) View.VISIBLE else View.GONE
+                alternateRepeat.text = alternateRepeatLabel(listOf("none", "daily", "weekdays", "weekly", "monthly")[position])
+                if (!enabled) alternateRepeat.isChecked = false
                 countPreset.isEnabled = enabled; count.isEnabled = enabled
                 if (!enabled) count.setText("1") else if ((count.text.toString().toIntOrNull() ?: 1) < 2) count.setText("2")
             }
@@ -1158,7 +1178,7 @@ class MainActivity : ComponentActivity() {
                 val repeatCode = repeatCodes[repeat.selectedItemPosition]
                 val total = count.text.toString().toIntOrNull()?.coerceIn(1, 365) ?: 1
                 alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                repo.checkHomeworkDuplicates(resolvedSelected, startDate, endDate, repeatCode, total) { duplicateResult ->
+                repo.checkHomeworkDuplicates(resolvedSelected, startDate, endDate, repeatCode, total, alternateRepeat.isChecked) { duplicateResult ->
                     runOnUiThread {
                         if (duplicateResult.isFailure) {
                             alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
@@ -1167,7 +1187,7 @@ class MainActivity : ComponentActivity() {
                         }
                         val duplicates = duplicateResult.getOrDefault(emptyList())
                         val registerNow = {
-                            repo.registerHomework(resolvedSelected, startDate, endDate, repeatCode, total) { result ->
+                            repo.registerHomework(resolvedSelected, startDate, endDate, repeatCode, total, alternateRepeat.isChecked) { result ->
                                 runOnUiThread {
                                     alert.dismiss()
                                     toast(if (result.isSuccess) "${result.getOrDefault(0)}개 숙제를 등록했습니다." else "숙제 등록에 실패했습니다.")

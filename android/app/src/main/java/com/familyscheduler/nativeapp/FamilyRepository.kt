@@ -327,7 +327,7 @@ class FamilyRepository {
 
                     val next = candidate.copy(
                         title = edited.title,
-                        start = shiftedStart?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
+                        start = shiftedStart?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm"))
                             ?: candidate.start,
                         end = shiftedEnd?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
                             ?: candidate.end,
@@ -964,7 +964,17 @@ class FamilyRepository {
                 val allDay = cursor.getInt(allDayIndex) != 0
                 val start = providerDateTime(beginMillis, allDay)
                 val end = endMillis.takeIf { it > 0L }?.let { providerDateTime(it, allDay) }
-                val importedId = "gcal_" + googleSyncDigest("$calendarId:$providerEventId:$beginMillis")
+                val location = cursor.getString(locationIndex)?.takeIf { it.isNotBlank() }
+                val memo = cursor.getString(descriptionIndex)?.takeIf { it.isNotBlank() }
+                val stableFields = listOf(
+                    title,
+                    start,
+                    end.orEmpty(),
+                    allDay.toString(),
+                    location.orEmpty(),
+                    memo.orEmpty(),
+                ).joinToString("\u001f")
+                val importedId = "gcal_" + googleSyncDigest(stableFields)
 
                 val event = FamilyEvent(
                     id = importedId,
@@ -975,25 +985,14 @@ class FamilyRepository {
                     memberIds = listOf("me"),
                     kind = "event",
                     repeat = "none",
-                    location = cursor.getString(locationIndex)?.takeIf { it.isNotBlank() },
-                    memo = cursor.getString(descriptionIndex)?.takeIf { it.isNotBlank() },
+                    location = location,
+                    memo = memo,
                     googleImported = true,
                     googleCalendarId = calendarId.toString(),
                     googleEventId = "$providerEventId:$beginMillis",
                     createdBy = auth.currentUser?.uid,
                 )
-                val fingerprint = googleSyncDigest(
-                    listOf(
-                        event.title,
-                        event.start,
-                        event.end.orEmpty(),
-                        event.allDay.toString(),
-                        event.location.orEmpty(),
-                        event.memo.orEmpty(),
-                        event.googleCalendarId.orEmpty(),
-                        event.googleEventId.orEmpty(),
-                    ).joinToString("\u001f")
-                )
+                val fingerprint = googleSyncDigest(stableFields)
                 fresh[importedId] = GoogleCalendarSyncRow(
                     day = event.date,
                     fingerprint = fingerprint,

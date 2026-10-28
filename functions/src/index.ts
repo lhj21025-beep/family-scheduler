@@ -120,7 +120,10 @@ export const sendScheduleReminders = onSchedule(
       if (event.kind === 'homework-complete' || !event.alarmMinutes?.length || !event.memberIds?.length) continue
       for (const alarmMinutes of event.alarmMinutes) {
         if (eventAlarmTarget(event.start, alarmMinutes) !== nowMinute) continue
-        const recipients = pushTokens.filter(t => event.memberIds.includes(t.memberId))
+        const recipients = pushTokens.filter(t =>
+          event.memberIds.includes(t.memberId) &&
+          (event.kind === 'approval-alert' || t.platform !== 'android')
+        )
         for (const recipient of recipients) {
           const key = `${sentKey(event.id, alarmMinutes)}_${recipient.memberId}`
           if (sentAlarms[key]) continue

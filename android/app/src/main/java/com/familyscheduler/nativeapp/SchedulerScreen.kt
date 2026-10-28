@@ -709,6 +709,30 @@ private fun TimedEventBlock(
     var dragY by remember(event.id, event.start) { mutableFloatStateOf(0f) }
     var resizeY by remember(event.id, event.end) { mutableFloatStateOf(0f) }
 
+    val dragModifier = if (event.googleImported) {
+        Modifier
+    } else {
+        Modifier.pointerInput(event.id, event.start) {
+            detectDragGesturesAfterLongPress(
+                onDragStart = { dragX = 0f; dragY = 0f },
+                onDrag = { _, amount ->
+                    dragX += amount.x
+                    dragY += amount.y
+                },
+                onDragEnd = {
+                    val dayDelta = if (dayWidthPx > 0f) (dragX / dayWidthPx).roundToInt() else 0
+                    val minuteDelta = if (hourHeightPx > 0f) ((dragY / hourHeightPx) * 60f).roundToInt() else 0
+                    val snappedMinutes = (minuteDelta / 5f).roundToInt() * 5
+                    val next = start.plusDays(dayDelta.toLong()).plusMinutes(snappedMinutes.toLong())
+                    dragX = 0f
+                    dragY = 0f
+                    onMoveEvent(event, next)
+                },
+                onDragCancel = { dragX = 0f; dragY = 0f },
+            )
+        }
+    }
+
     Box(
         Modifier.fillMaxWidth()
             .offset(y = hourHeight * (startMinutes / 60f))
@@ -716,25 +740,7 @@ private fun TimedEventBlock(
             .height((hourHeight * (duration / 60f)).coerceAtLeast(30.dp))
             .padding(horizontal = 1.dp, vertical = 1.dp)
             .background(Color(eventColorLong(event)), RoundedCornerShape(5.dp))
-            .pointerInput(event.id, event.start) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { dragX = 0f; dragY = 0f },
-                    onDrag = { _, amount ->
-                        dragX += amount.x
-                        dragY += amount.y
-                    },
-                    onDragEnd = {
-                        val dayDelta = if (dayWidthPx > 0f) (dragX / dayWidthPx).roundToInt() else 0
-                        val minuteDelta = if (hourHeightPx > 0f) ((dragY / hourHeightPx) * 60f).roundToInt() else 0
-                        val snappedMinutes = (minuteDelta / 5f).roundToInt() * 5
-                        val next = start.plusDays(dayDelta.toLong()).plusMinutes(snappedMinutes.toLong())
-                        dragX = 0f
-                        dragY = 0f
-                        onMoveEvent(event, next)
-                    },
-                    onDragCancel = { dragX = 0f; dragY = 0f },
-                )
-            }
+            .then(dragModifier)
             .clickable { onEvent(event) }
             .padding(horizontal = 3.dp, vertical = 2.dp)
     ) {
@@ -746,26 +752,28 @@ private fun TimedEventBlock(
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(bottom = 7.dp),
         )
-        Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(8.dp)
-                .background(Color.White.copy(alpha = 0.28f), RoundedCornerShape(3.dp))
-                .pointerInput(event.id, event.end) {
-                    detectDragGestures(
-                        onDragStart = { resizeY = 0f },
-                        onDrag = { _, amount -> resizeY += amount.y },
-                        onDragEnd = {
-                            val minuteDelta =
-                                if (hourHeightPx > 0f) ((resizeY / hourHeightPx) * 60f).roundToInt()
-                                else 0
-                            val snapped = (minuteDelta / 5f).roundToInt() * 5
-                            val nextDuration = (duration + snapped).coerceAtLeast(30L)
-                            resizeY = 0f
-                            onResizeEvent(event, nextDuration)
-                        },
-                        onDragCancel = { resizeY = 0f },
-                    )
-                }
-        )
+        if (!event.googleImported) {
+            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(8.dp)
+                    .background(Color.White.copy(alpha = 0.28f), RoundedCornerShape(3.dp))
+                    .pointerInput(event.id, event.end) {
+                        detectDragGestures(
+                            onDragStart = { resizeY = 0f },
+                            onDrag = { _, amount -> resizeY += amount.y },
+                            onDragEnd = {
+                                val minuteDelta =
+                                    if (hourHeightPx > 0f) ((resizeY / hourHeightPx) * 60f).roundToInt()
+                                    else 0
+                                val snapped = (minuteDelta / 5f).roundToInt() * 5
+                                val nextDuration = (duration + snapped).coerceAtLeast(30L)
+                                resizeY = 0f
+                                onResizeEvent(event, nextDuration)
+                            },
+                            onDragCancel = { resizeY = 0f },
+                        )
+                    }
+            )
+        }
     }
 }
 

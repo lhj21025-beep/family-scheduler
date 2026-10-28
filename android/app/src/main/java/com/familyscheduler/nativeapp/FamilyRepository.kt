@@ -327,7 +327,7 @@ class FamilyRepository {
 
                     val next = candidate.copy(
                         title = edited.title,
-                        start = shiftedStart?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm"))
+                        start = shiftedStart?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
                             ?: candidate.start,
                         end = shiftedEnd?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
                             ?: candidate.end,
@@ -1008,7 +1008,7 @@ class FamilyRepository {
         return Instant.ofEpochMilli(epochMillis)
             .atZone(zone)
             .toLocalDateTime()
-            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm"))
     }
 
     private fun googleSyncDigest(value: String): String =

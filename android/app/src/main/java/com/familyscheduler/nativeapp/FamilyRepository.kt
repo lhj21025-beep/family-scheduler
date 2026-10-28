@@ -234,7 +234,16 @@ class FamilyRepository {
         if (event.kind != "event") return done(Result.success(1))
         db.collection("scheduleDays").get()
             .addOnSuccessListener { snapshots ->
-                val count = snapshots.documents.flatMap { parseEvents(it) }.count { sameEventSeries(it, event) }
+                val all = snapshots.documents.flatMap { parseEvents(it) }
+                val count = if (!event.eventSeriesId.isNullOrBlank()) {
+                    all.count { it.kind == "event" && it.eventSeriesId == event.eventSeriesId }
+                } else {
+                    val legacyMatches = all.filter { sameEventSeries(it, event) }
+                    val hasRepeatAnchor = legacyMatches.any {
+                        it.repeat != "none" || !it.seriesRepeat.isNullOrBlank()
+                    }
+                    if (hasRepeatAnchor) legacyMatches.size else 1
+                }
                 done(Result.success(count.coerceAtLeast(1)))
             }
             .addOnFailureListener { done(Result.failure(it)) }

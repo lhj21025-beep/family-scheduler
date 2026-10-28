@@ -159,6 +159,7 @@ class MainActivity : ComponentActivity() {
         repo.listenApprovals { rows -> runOnUiThread { approvals = rows } }
         requestNotificationPermission()
         repo.registerPushToken()
+        rebuildLocalAlarms()
         listenMonth()
     }
 
@@ -263,8 +264,24 @@ class MainActivity : ComponentActivity() {
     private fun listenMonth() {
         composeLoading = true
         repo.listenMonth(month, { rows -> runOnUiThread {
-            allEvents = rows; composeEvents = rows; composeLoading = false
-            rows.filter { event -> event.memberIds.contains(repo.signedMember()) }.forEach { event -> AlarmScheduler.scheduleEvent(this, event) }
+            val memberId = repo.signedMember()
+            val nextById = rows.filter { it.kind == "event" && it.memberIds.contains(memberId) }
+                .associateBy { it.id }
+            allEvents.filter { it.kind == "event" && it.memberIds.contains(memberId) }
+                .forEach { old ->
+                    val next = nextById[old.id]
+                    if (next == null ||
+                        next.start != old.start ||
+                        next.alarmMinutes != old.alarmMinutes ||
+                        next.memberIds != old.memberIds
+                    ) {
+                        AlarmScheduler.cancelEvent(this, old.id)
+                    }
+                }
+            allEvents = rows
+            composeEvents = rows
+            composeLoading = false
+            nextById.values.forEach { event -> AlarmScheduler.scheduleEvent(this, event) }
         } }, { runOnUiThread { composeLoading = false; toast("일정을 불러오지 못했습니다.") } })
     }
 

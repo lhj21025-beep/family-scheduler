@@ -23,11 +23,14 @@ class SpellingQuizDialog(
 ) {
     private val db = FirebaseFirestore.getInstance()
     private val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
-    private val dayId = today.toString()
-    private val doc = db.collection("scheduleDays").document(dayId)
+    private var selectedDay = today
+    private val dayId: String get() = selectedDay.toString()
+    private val doc get() = db.collection("scheduleDays").document(dayId)
     private val box = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(18, 16, 18, 18) }
     private val members = listOf("me" to "아빠", "wife" to "엄마", "son" to "강천")
     private lateinit var dialog: AlertDialog
+
+    private data class HistoryRow(val date: String, val score: Int?, val quiz: Map<*, *>)
 
     private data class Item(val id: String, val grade: Int, val kind: String, val prompt: String,
                             val options: List<String>, val answer: String, val explanation: String) {
@@ -176,11 +179,13 @@ class SpellingQuizDialog(
         load()
     }
 
-    private fun load() {
+    private fun load(day: LocalDate = selectedDay) {
+        selectedDay = day
         doc.get().addOnSuccessListener { snap ->
             val quiz = snap.get("spellingQuiz") as? Map<*, *>
             if (quiz != null) render(quiz)
-            else createFallback()
+            else if (selectedDay == today) createFallback()
+            else showError(dayId + " 시험 기록을 찾지 못했습니다.")
         }.addOnFailureListener { error -> showError("시험을 불러오지 못했습니다: " + error.message) }
     }
 
@@ -231,7 +236,7 @@ class SpellingQuizDialog(
                     tx.set(doc, mapOf("date" to dayId, "spellingQuiz" to payload), SetOptions.merge())
                 }
                 null
-            }.addOnSuccessListener { load() }
+            }.addOnSuccessListener { load(selectedDay) }
                 .addOnFailureListener { e -> showError("문제를 만들지 못했습니다: " + e.message) }
         }.addOnFailureListener { error -> showError("복습 문제 확인에 실패했습니다: " + error.message) }
     }
@@ -257,10 +262,14 @@ class SpellingQuizDialog(
         } else {
             "검증된 맞춤법 문제은행 · AI 미생성 시 자동 대체"
         }
+        addHistoryControls()
         box.addView(text(dayId + " · 초등 " + (quiz["grade"] ?: grade()).toString() +
             "학년\n" + sourceDescription + " · 가족 공통 3문제", 14f))
         if (mine != null) {
-            box.addView(text("오늘 완료 · " + (mine["score"] ?: 0).toString() + "/3점", 17f, true))
+            box.addView(text((if (selectedDay == today) "오늘 완료 · " else dayId + " 완료 · ") +
+                (mine["score"] ?: 0).toString() + "/3점", 17f, true))
+        } else if (selectedDay.isBefore(today)) {
+            box.addView(text("미응시 · 지금 풀 수 있습니다.", 15f, true))
         }
         questions.forEachIndexed { index, item ->
             box.addView(text((index + 1).toString() + "번 · 빈칸에 들어갈 알맞은 단어를 고르세요.\n" + choicePrompt(item), 16f, true))
@@ -288,7 +297,7 @@ class SpellingQuizDialog(
         }
         if (mine == null) {
             box.addView(Button(activity).apply {
-                text = "3문제 채점하고 제출"
+                text = if (selectedDay == today) "오늘 3문제 채점하고 제출" else dayId + " 밀린 3문제 채점하고 제출"
                 setOnClickListener {
                     if (picks.any { it.isBlank() }) {
                         Toast.makeText(activity, "3문제 모두 답해 주세요.", Toast.LENGTH_SHORT).show()
@@ -299,7 +308,7 @@ class SpellingQuizDialog(
                 }
             })
         } else {
-            box.addView(text("하루 1회 응시 · 가족에게는 점수와 순위만 공개됩니다.\n틀린 문제는 3일·7일·14일 후 복습에 활용됩니다.", 12f))
+            box.addView(text("제출한 문제는 언제든 다시 확인할 수 있습니다.\n내가 고른 답·정답·해설을 함께 볼 수 있고, 틀린 문제는 3일·7일·14일 후 복습에 활용됩니다.", 12f))
         }
         box.addView(text("가족 주간·월간 순위", 17f, true))
         val toggles = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
@@ -316,6 +325,68 @@ class SpellingQuizDialog(
             setOnClickListener { loadRanking("주간", ranks) }
         })
         loadRanking("주간", ranks)
+    }
+
+    private fun addHistoryControls() {
+        val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        row.addView(Button(activity).apply {
+            text = "오늘"
+            isEnabled = selectedDay != today
+            setOnClickListener { load(today) }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(Button(activity).apply {
+            text = "밀린 문제"
+            setOnClickListener { showQuizHistory(true) }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(Button(activity).apply {
+            text = "지난 문제"
+            setOnClickListener { showQuizHistory(false) }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        box.addView(row)
+    }
+
+    private fun showQuizHistory(missedOnly: Boolean) {
+        val from = today.minusYears(1).toString()
+        db.collection("scheduleDays")
+            .whereGreaterThanOrEqualTo("date", from)
+            .whereLessThanOrEqualTo("date", today.toString())
+            .get()
+            .addOnSuccessListener { snapshots ->
+                val rows = snapshots.documents.mapNotNull { snap ->
+                    val quiz = snap.get("spellingQuiz") as? Map<*, *> ?: return@mapNotNull null
+                    val submissions = quiz["submissions"] as? Map<*, *> ?: emptyMap<String, Any>()
+                    val mine = submissions[member] as? Map<*, *>
+                    if (missedOnly && (snap.id >= today.toString() || mine != null)) return@mapNotNull null
+                    HistoryRow(
+                        date = snap.id,
+                        score = (mine?.get("score") as? Number)?.toInt(),
+                        quiz = quiz,
+                    )
+                }.sortedByDescending { it.date }
+
+                if (rows.isEmpty()) {
+                    Toast.makeText(
+                        activity,
+                        if (missedOnly) "밀린 맞춤법 문제가 없습니다." else "지난 맞춤법 문제가 없습니다.",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    return@addOnSuccessListener
+                }
+
+                val labels = rows.map { row ->
+                    row.date + " · " + (row.score?.let { "$it/3점" } ?: "미응시")
+                }.toTypedArray()
+                AlertDialog.Builder(activity)
+                    .setTitle(if (missedOnly) "밀린 문제" else "지난 문제")
+                    .setItems(labels) { _, which ->
+                        load(LocalDate.parse(rows[which].date))
+                    }
+                    .setNegativeButton("취소", null)
+                    .show()
+            }
+            .addOnFailureListener { error ->
+                Toast.makeText(activity, "지난 문제를 불러오지 못했습니다: " + error.message, Toast.LENGTH_LONG).show()
+            }
     }
 
     private fun save(questions: List<Item>, picks: List<String>) {

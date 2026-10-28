@@ -585,6 +585,11 @@ class FamilyRepository {
             val current = HomeworkApproval.fromMap(raw) ?: error("부모 확인 요청을 읽지 못했습니다.")
             if (current.status != "pending") error("이미 다른 보호자가 처리한 요청입니다.")
 
+            val alertDate = runCatching {
+                LocalDateTime.parse(current.requestedAt).plusMinutes(1).toLocalDate().toString()
+            }.getOrElse { LocalDate.now().toString() }
+            val alertRef = db.collection("scheduleDays").document(alertDate)
+            val alertSnap = transaction.get(alertRef)
             val snapshots = refs.map { transaction.get(it) }
             var changed = 0
             if (approve) {
@@ -622,14 +627,13 @@ class FamilyRepository {
                 decidedBy = signedMember(),
             )
             transaction.update(familyRef, "approvalRequests.${request.id}", decided.toMap())
-            val alertDate = runCatching {
-                LocalDateTime.parse(current.requestedAt).plusMinutes(1).toLocalDate().toString()
-            }.getOrElse { LocalDate.now().toString() }
-            transaction.update(
-                db.collection("scheduleDays").document(alertDate),
-                "events.${safeKey("approval_alert_${request.id}")}",
-                FieldValue.delete()
-            )
+            if (alertSnap.exists()) {
+                transaction.update(
+                    alertRef,
+                    "events.${safeKey("approval_alert_${request.id}")}",
+                    FieldValue.delete()
+                )
+            }
             changed
         }.addOnSuccessListener { refreshWidgets(); done(Result.success(it)) }
             .addOnFailureListener { done(Result.failure(it)) }

@@ -51,6 +51,7 @@ type EventItem = {
   memo?: string;
   repeat?: Repeat;
   repeatCount?: number;
+  alternateRepeat?: boolean;
   repeatEndMode?: RepeatEndMode;
   repeatUntil?: string;
   calendarType?: "solar" | "lunar";
@@ -145,47 +146,60 @@ const cleanHomeworkTitle = (title: string) =>
     .replace(/^(?:(?:📝|✅|☑️|☑|✔️|✔)\s*)+/u, "")
     .replace(/^숙제 완료\s*·\s*/, "")
     .trim();
-const nextRepeatDate = (d: Date, repeat: Repeat, anchorDay = d.getDate()) => {
+const nextRepeatDate = (d: Date, repeat: Repeat, anchorDay = d.getDate(), alternate = false, anchor = d) => {
   const next = new Date(d);
   if (repeat === "daily") next.setDate(next.getDate() + 1);
   else if (repeat === "weekdays") {
     do {
       next.setDate(next.getDate() + 1);
     } while (next.getDay() === 0 || next.getDay() === 6);
-  } else if (repeat === "weekly") next.setDate(next.getDate() + 7);
+  } else if (repeat === "weekly") next.setDate(next.getDate() + (alternate ? 14 : 7));
   else if (repeat === "monthly") {
     next.setDate(1);
-    next.setMonth(next.getMonth() + 1);
+    next.setMonth(next.getMonth() + (alternate ? 2 : 1));
     const last = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
     next.setDate(Math.min(anchorDay, last));
   }
+  if (alternate && (repeat === "daily" || repeat === "weekdays")) {
+    const calendarDay = (value: Date) => Date.UTC(value.getFullYear(), value.getMonth(), value.getDate()) / 86400000;
+    const firstSunday = calendarDay(anchor) - anchor.getDay();
+    while (Math.floor((calendarDay(next) - firstSunday) / 7) % 2 !== 0 ||
+      (repeat === "weekdays" && (next.getDay() === 0 || next.getDay() === 6))) {
+      next.setDate(next.getDate() + 1);
+    }
+  }
   return next;
 };
-const repeatDates = (start: string, repeat: Repeat, count = 1, until?: string) => {
+const repeatDates = (start: string, repeat: Repeat, count = 1, until?: string, alternate = false) => {
   if (repeat === "none") return [start];
   const total = clampRepeatCount(count);
   const out: string[] = [start];
   let d = new Date(start);
   const anchorDay = d.getDate();
   while (out.length < (until ? 365 : total)) {
-    d = nextRepeatDate(d, repeat, anchorDay);
+    d = nextRepeatDate(d, repeat, anchorDay, alternate, new Date(out[0]));
     if (until && dateKey(d) > until) break;
     out.push(dateTime(d));
   }
   return out;
 };
-const homeworkRepeatDates = (startDate: string, repeat: Repeat, count = 1) => {
+const homeworkRepeatDates = (startDate: string, repeat: Repeat, count = 1, alternate = false) => {
   if (repeat === "none") return [startDate];
   const total = clampRepeatCount(count);
   const out: string[] = [startDate];
   let d = new Date(`${startDate}T12:00:00`);
   const anchorDay = d.getDate();
   while (out.length < total) {
-    d = nextRepeatDate(d, repeat, anchorDay);
+    d = nextRepeatDate(d, repeat, anchorDay, alternate, new Date(out[0]));
     out.push(dateKey(d));
   }
   return out;
 };
+const alternateRepeatHint = (repeat: Repeat) =>
+  repeat === "monthly" ? "한 달 건너 같은 날짜에 반복"
+    : repeat === "weekly" ? "한 주 건너 같은 요일에 반복"
+    : repeat === "weekdays" ? "한 주 건너 월~금에 반복"
+    : "한 주 건너 일~토에 반복";
 type LunarInfo = { year: number; month: number; day: number; intercalation: boolean };
 const solarToLunar = (solar: string): LunarInfo | null => {
   const [year, month, day] = solar.slice(0, 10).split("-").map(Number);
@@ -262,6 +276,7 @@ export default function App() {
   const [googleSyncStatus, setGoogleSyncStatus] = useState("");
   const [spellingOpen, setSpellingOpen] = useState(false);
   const [homeworkRepeat, setHomeworkRepeat] = useState<Repeat>("daily");
+  const [homeworkAlternateRepeat, setHomeworkAlternateRepeat] = useState(false);
   const [homeworkRepeatCount, setHomeworkRepeatCount] = useState(2);
   const [schoolHomeworkDetail, setSchoolHomeworkDetail] = useState("");
   const schoolOtherSelected = homeworks.some(
@@ -556,7 +571,7 @@ export default function App() {
       const lunar = solarToLunar(e.start);
       const dates = repeat === "lunarYearly" && lunar
         ? lunarRepeatDates(e.start, count, until, lunar)
-        : repeatDates(e.start, repeat, count, until);
+        : repeatDates(e.start, repeat, count, until, e.alternateRepeat);
       const duration = e.end
         ? new Date(e.end).getTime() - new Date(e.start).getTime()
         : 3600000;
@@ -570,6 +585,7 @@ export default function App() {
               ? dateTime(new Date(new Date(d).getTime() + duration))
               : undefined,
             repeat: i === 0 ? repeat : "none",
+            alternateRepeat: i === 0 && repeat !== "none" && repeat !== "lunarYearly" && !!e.alternateRepeat,
             repeatCount: i === 0 ? count : 1,
             repeatEndMode: i === 0 ? (e.repeatEndMode ?? "count") : "count",
             repeatUntil: i === 0 ? until : undefined,
@@ -634,7 +650,7 @@ export default function App() {
           : h,
       );
     const count = homeworkRepeat === "none" ? 1 : clampRepeatCount(homeworkRepeatCount);
-    const occurrenceStarts = homeworkRepeatDates(homeworkStartDate, homeworkRepeat, count);
+    const occurrenceStarts = homeworkRepeatDates(homeworkStartDate, homeworkRepeat, count, homeworkAlternateRepeat);
     const blockDays = daysBetween(homeworkStartDate, homeworkEndDate);
     const proposed = chosen.flatMap((h) => {
       const seriesId = uid();
@@ -654,6 +670,7 @@ export default function App() {
           homeworkEndDate: occEnd,
           completed: false,
           repeat: homeworkRepeat,
+          alternateRepeat: homeworkRepeat !== "none" && homeworkAlternateRepeat,
           repeatCount: count,
         }));
       });
@@ -688,6 +705,7 @@ export default function App() {
       setHomeworkStartDate(today);
       setHomeworkEndDate(today);
       setHomeworkRepeat("none");
+      setHomeworkAlternateRepeat(false);
       setHomeworkRepeatCount(1);
       flash(`${proposed.length}개 숙제를 등록했습니다.`);
     } catch (e) {
@@ -1720,6 +1738,7 @@ export default function App() {
                   onChange={(e) => {
                     const r = e.target.value as Repeat;
                     setHomeworkRepeat(r);
+                    if (r === "none") setHomeworkAlternateRepeat(false);
                     setHomeworkRepeatCount(
                       r === "none" ? 1 : Math.max(2, homeworkRepeatCount),
                     );
@@ -1732,6 +1751,14 @@ export default function App() {
                   <option value="monthly">매월</option>
                 </select>
               </label>
+              {homeworkRepeat !== "none" && (
+                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input type="checkbox" style={{ width: "auto" }} checked={homeworkAlternateRepeat}
+                    onChange={(e) => setHomeworkAlternateRepeat(e.target.checked)} />
+                  격주
+                  <span className="field-hint">{alternateRepeatHint(homeworkRepeat)}</span>
+                </label>
+              )}
               <label>
                 반복 횟수
                 <select
@@ -2178,6 +2205,7 @@ export default function App() {
                           setModal({
                             ...modal,
                             repeat: r,
+                            alternateRepeat: r === "none" || r === "lunarYearly" ? false : modal.alternateRepeat,
                             repeatCount:
                               r === "none"
                                 ? 1
@@ -2193,6 +2221,14 @@ export default function App() {
                         <option value="lunarYearly">음력 매년</option>
                       </select>
                     </label>
+                    {modal.repeat && modal.repeat !== "none" && modal.repeat !== "lunarYearly" && (
+                      <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <input type="checkbox" style={{ width: "auto" }} checked={!!modal.alternateRepeat}
+                          onChange={(e) => setModal({ ...modal, alternateRepeat: e.target.checked })} />
+                        격주
+                        <span className="field-hint">{alternateRepeatHint(modal.repeat)}</span>
+                      </label>
+                    )}
                     {(modal.repeat ?? "none") !== "none" && (
                       <div className="form-grid">
                         <label>

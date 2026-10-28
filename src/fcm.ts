@@ -29,6 +29,7 @@ export async function registerPushForMember(memberId: 'me' | 'wife' | 'son') {
       [deviceKey]: {
         token,
         memberId,
+        platform: 'web',
         updatedAt: new Date().toISOString(),
       },
     },

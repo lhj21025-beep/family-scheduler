@@ -268,6 +268,19 @@ class MainActivity : ComponentActivity() {
         } }, { runOnUiThread { composeLoading = false; toast("일정을 불러오지 못했습니다.") } })
     }
 
+    private fun rebuildLocalAlarms() {
+        repo.loadAllEvents { result ->
+            result.onSuccess { rows ->
+                runOnUiThread {
+                    AlarmScheduler.cancelAll(this)
+                    rows.filter {
+                        it.kind == "event" && it.memberIds.contains(repo.signedMember())
+                    }.forEach { AlarmScheduler.scheduleEvent(this, it) }
+                }
+            }
+        }
+    }
+
     private fun moveEventFromCalendar(event: FamilyEvent, nextStart: LocalDateTime) {
         if (event.kind != "event" || event.googleImported) return
         val oldStart = runCatching { LocalDateTime.parse(event.start) }.getOrNull() ?: return
@@ -493,10 +506,9 @@ class MainActivity : ComponentActivity() {
             .setTitle("반복 일정 삭제")
             .setItems(choices) { _, which ->
                 val mode = listOf("one", "future", "all")[which]
-                val affected = affectedSeriesEvents(event, mode)
                 repo.deleteEventSeries(event, mode) { result ->
                     runOnUiThread {
-                        if (result.isSuccess) affected.forEach { AlarmScheduler.cancelEvent(this, it.id) }
+                        if (result.isSuccess) rebuildLocalAlarms()
                         toast(
                             if (result.isSuccess) "${result.getOrDefault(0)}개의 일정을 삭제했습니다."
                             else "삭제에 실패했습니다: ${result.exceptionOrNull()?.message.orEmpty()}"
@@ -789,12 +801,11 @@ class MainActivity : ComponentActivity() {
                     )
 
                     val performUpdate: (String) -> Unit = { mode ->
-                        val affected = affectedSeriesEvents(existing, mode)
                         alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
                         repo.updateEventSeries(existing, edited, mode) { result ->
                             runOnUiThread {
                                 if (result.isSuccess) {
-                                    affected.forEach { AlarmScheduler.cancelEvent(this, it.id) }
+                                    rebuildLocalAlarms()
                                     alert.dismiss()
                                     listenMonth()
                                     toast("${result.getOrDefault(1)}개의 일정을 수정했습니다.")

@@ -23,6 +23,7 @@ class SpellingQuizDialog(
 ) {
     private val db = FirebaseFirestore.getInstance()
     private val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
+    private val spellingStartDay = LocalDate.of(2026, 10, 22)
     private var selectedDay = today
     private val dayId: String get() = selectedDay.toString()
     private val doc get() = db.collection("scheduleDays").document(dayId)
@@ -155,7 +156,8 @@ class SpellingQuizDialog(
         return if (contextual) original else (exampleByAnswer[question.answer] ?: original)
     }
 
-    private fun grade() = (4 + today.year - 2026 - if (today.monthValue < 3) 1 else 0).coerceIn(1, 6)
+    private fun grade(day: LocalDate = selectedDay) =
+        (4 + day.year - 2026 - if (day.monthValue < 3) 1 else 0).coerceIn(1, 6)
     private fun text(value: String, size: Float = 15f, bold: Boolean = false): TextView =
         TextView(activity).apply {
             this.text = value
@@ -346,7 +348,16 @@ class SpellingQuizDialog(
     }
 
     private fun showQuizHistory(missedOnly: Boolean) {
-        val from = today.minusYears(1).toString()
+        ensurePastQuizzes(
+            done = { loadQuizHistoryList(missedOnly) },
+            fail = { error ->
+                Toast.makeText(activity, "밀린 문제 준비에 실패했습니다: " + error.message, Toast.LENGTH_LONG).show()
+            },
+        )
+    }
+
+    private fun loadQuizHistoryList(missedOnly: Boolean) {
+        val from = maxOf(spellingStartDay, today.minusYears(1)).toString()
         db.collection("scheduleDays")
             .whereGreaterThanOrEqualTo("date", from)
             .whereLessThanOrEqualTo("date", today.toString())
@@ -387,6 +398,81 @@ class SpellingQuizDialog(
             .addOnFailureListener { error ->
                 Toast.makeText(activity, "지난 문제를 불러오지 못했습니다: " + error.message, Toast.LENGTH_LONG).show()
             }
+    }
+
+    private fun ensurePastQuizzes(done: () -> Unit, fail: (Exception) -> Unit) {
+        val start = maxOf(spellingStartDay, today.minusYears(1))
+        val end = today.minusDays(1)
+        if (end.isBefore(start)) {
+            done()
+            return
+        }
+
+        db.collection("scheduleDays")
+            .whereGreaterThanOrEqualTo("date", start.toString())
+            .whereLessThanOrEqualTo("date", end.toString())
+            .get()
+            .addOnSuccessListener { snapshots ->
+                val existing = snapshots.documents
+                    .filter { it.get("spellingQuiz") != null }
+                    .map { it.id }
+                    .toHashSet()
+                val dates = generateSequence(start) { it.plusDays(1) }
+                    .takeWhile { !it.isAfter(end) }
+                    .toList()
+
+                fun createAt(index: Int) {
+                    if (index >= dates.size) {
+                        done()
+                        return
+                    }
+                    val day = dates[index]
+                    if (day.toString() in existing) {
+                        createAt(index + 1)
+                        return
+                    }
+                    val target = db.collection("scheduleDays").document(day.toString())
+                    val payload = fallbackPayload(day)
+                    db.runTransaction { tx ->
+                        val snap = tx.get(target)
+                        if (!snap.contains("spellingQuiz")) {
+                            tx.set(
+                                target,
+                                mapOf("date" to day.toString(), "spellingQuiz" to payload),
+                                SetOptions.merge(),
+                            )
+                        }
+                        null
+                    }.addOnSuccessListener { createAt(index + 1) }
+                        .addOnFailureListener { fail(it) }
+                }
+                createAt(0)
+            }
+            .addOnFailureListener { fail(it) }
+    }
+
+    private fun fallbackPayload(day: LocalDate): Map<String, Any> {
+        val dayText = day.toString()
+        val selected = bank
+            .filter { it.grade == grade(day) && optionsFor(it).size == 2 }
+            .sortedBy { (dayText + it.id).hashCode().toUInt().toLong() }
+            .take(3)
+            .map { item ->
+                val choices = optionsFor(item)
+                val options = if ((dayText + item.id).hashCode() % 2 == 0) choices.reversed() else choices
+                item.copy(
+                    kind = "choice",
+                    prompt = choicePrompt(item),
+                    options = options,
+                ).toMap()
+            }
+        return mapOf(
+            "date" to dayText,
+            "grade" to grade(day),
+            "source" to "curated",
+            "questions" to selected,
+            "submissions" to emptyMap<String, Any>(),
+        )
     }
 
     private fun save(questions: List<Item>, picks: List<String>) {

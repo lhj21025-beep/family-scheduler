@@ -13,6 +13,7 @@ const people: { id: SpellingMember; label: string }[] = [
 ];
 
 type DayRow = { date: string; spellingQuiz?: DailySpellingQuiz };
+type QuizView = "today" | "missed" | "history";
 
 function weekStart(day: string): string {
   const date = new Date(day + "T12:00:00Z");
@@ -24,34 +25,46 @@ export default function SpellingQuiz({
   member, close,
 }: { member: SpellingMember; close: () => void }) {
   const today = kstDay();
-  const [quiz, setQuiz] = useState<DailySpellingQuiz | null>(null);
+  const [todayQuiz, setTodayQuiz] = useState<DailySpellingQuiz | null>(null);
   const [days, setDays] = useState<DayRow[]>([]);
   const [answers, setAnswers] = useState<string[]>(["", "", ""]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [rankMode, setRankMode] = useState<"weekly" | "monthly">("weekly");
+  const [view, setView] = useState<QuizView>("today");
+  const [selectedDate, setSelectedDate] = useState(today);
+
   const monthlyStart = today.slice(0, 7) + "-01";
   const weeklyStart = weekStart(today);
-  const from = monthlyStart < weeklyStart ? monthlyStart : weeklyStart;
-  const mySubmission = quiz?.submissions?.[member];
+  const historyFrom = shiftedDay(today, -365);
 
   useEffect(() => {
     const ref = doc(db, "scheduleDays", today);
     const stop = onSnapshot(ref, snap => {
       const item = snap.data() as DayRow | undefined;
-      setQuiz(item?.spellingQuiz ?? null);
+      setTodayQuiz(item?.spellingQuiz ?? null);
       if (item?.spellingQuiz) setLoading(false);
-    }, err => { setError("오늘 시험을 불러오지 못했습니다: " + err.message); setLoading(false); });
+    }, err => {
+      setError("오늘 시험을 불러오지 못했습니다: " + err.message);
+      setLoading(false);
+    });
 
-    const q = query(collection(db, "scheduleDays"), where("date", ">=", from), where("date", "<=", today));
-    const stopHistory = onSnapshot(q, snapshot => {
-      setDays(snapshot.docs.map(s => s.data() as DayRow));
-    }, err => setError("가족 순위 동기화에 실패했습니다: " + err.message));
+    const historyQuery = query(
+      collection(db, "scheduleDays"),
+      where("date", ">=", historyFrom),
+      where("date", "<=", today),
+    );
+    const stopHistory = onSnapshot(historyQuery, snapshot => {
+      setDays(
+        snapshot.docs
+          .map(s => s.data() as DayRow)
+          .filter(row => !!row.spellingQuiz)
+          .sort((a, b) => b.date.localeCompare(a.date)),
+      );
+    }, err => setError("맞춤법 기록 동기화에 실패했습니다: " + err.message));
 
     let cancelled = false;
-    // A daily shared quiz is created once. The transaction prevents different
-    // questions being assigned when parents and children open simultaneously.
     async function ensure() {
       try {
         const old = await getDocs(query(
@@ -66,7 +79,6 @@ export default function SpellingQuiz({
         await runTransaction(db, async tx => {
           const snap = await tx.get(ref);
           if (snap.data()?.spellingQuiz) return;
-          // Merge keeps the existing calendar events, reminders and metadata intact.
           tx.set(ref, { date: today, spellingQuiz: generated }, { merge: true });
         });
       } catch (e) {
@@ -78,36 +90,84 @@ export default function SpellingQuiz({
     }
     void ensure();
     return () => { cancelled = true; stop(); stopHistory(); };
-  }, [today, from]);
+  }, [today, historyFrom]);
+
+  const todayRow = useMemo<DayRow | undefined>(() => {
+    const historyToday = days.find(d => d.date === today);
+    return historyToday ?? (todayQuiz ? { date: today, spellingQuiz: todayQuiz } : undefined);
+  }, [days, today, todayQuiz]);
+
+  const allQuizDays = useMemo(() => {
+    const map = new Map<string, DayRow>();
+    days.forEach(day => map.set(day.date, day));
+    if (todayRow) map.set(today, todayRow);
+    return [...map.values()].filter(day => !!day.spellingQuiz).sort((a, b) => b.date.localeCompare(a.date));
+  }, [days, todayRow, today]);
+
+  const missedDays = useMemo(
+    () => allQuizDays.filter(day => day.date < today && !day.spellingQuiz?.submissions?.[member]),
+    [allQuizDays, today, member],
+  );
+
+  const activeRow = selectedDate === today
+    ? todayRow
+    : allQuizDays.find(day => day.date === selectedDate);
+  const activeQuiz = activeRow?.spellingQuiz ?? null;
+  const mySubmission = activeQuiz?.submissions?.[member];
+
+  useEffect(() => {
+    setAnswers(["", "", ""]);
+  }, [selectedDate, member]);
 
   const ranking = useMemo(() => {
     const start = rankMode === "weekly" ? weeklyStart : monthlyStart;
     return people.map(p => {
-      const submissions = days
+      const submissions = allQuizDays
         .filter(d => d.date >= start && d.date <= today)
         .map(d => d.spellingQuiz?.submissions?.[p.id])
         .filter((s): s is NonNullable<typeof s> => !!s);
       return { ...p, score: submissions.reduce((n, s) => n + s.score, 0), played: submissions.length };
-    }).sort((a, b) => b.score - a.score || b.played - a.played || people.findIndex(p => p.id === a.id) - people.findIndex(p => p.id === b.id));
-  }, [days, rankMode, monthlyStart, weeklyStart, today]);
+    }).sort((a, b) =>
+      b.score - a.score ||
+      b.played - a.played ||
+      people.findIndex(p => p.id === a.id) - people.findIndex(p => p.id === b.id)
+    );
+  }, [allQuizDays, rankMode, monthlyStart, weeklyStart, today]);
+
+  function selectView(next: QuizView) {
+    setView(next);
+    setError("");
+    setAnswers(["", "", ""]);
+    if (next === "today") setSelectedDate(today);
+    else if (next === "missed" && missedDays.length) setSelectedDate(missedDays[0].date);
+    else if (next === "history" && allQuizDays.length) setSelectedDate(allQuizDays[0].date);
+  }
 
   async function submit() {
-    if (!quiz || busy || mySubmission || answers.some(a => !a.trim()) || quiz.questions.some(q => spellingChoices(q).length !== 2)) return;
+    if (!activeQuiz || busy || mySubmission || answers.some(a => !a.trim()) ||
+        activeQuiz.questions.some(q => spellingChoices(q).length !== 2)) return;
     setBusy(true);
     setError("");
     try {
+      const targetDate = selectedDate;
       await runTransaction(db, async tx => {
-        const ref = doc(db, "scheduleDays", today);
+        const ref = doc(db, "scheduleDays", targetDate);
         const snap = await tx.get(ref);
         const current = (snap.data() as DayRow | undefined)?.spellingQuiz;
         if (!current || current.questions.length !== 3) throw new Error("시험 문제를 다시 불러와 주세요.");
-        if (current.submissions?.[member]) throw new Error("오늘 시험은 이미 제출했습니다.");
-        if (quiz.questions.some((q, i) => q.id !== current.questions[i]?.id)) throw new Error("시험 문제가 변경됐습니다. 새로고침해 주세요.");
-        const score = current.questions.reduce((n, q, i) => n + Number(isCorrect(answers[i], q.answer)), 0);
+        if (current.submissions?.[member]) throw new Error("이미 제출한 시험입니다.");
+        if (activeQuiz.questions.some((q, i) => q.id !== current.questions[i]?.id))
+          throw new Error("시험 문제가 변경됐습니다. 새로고침해 주세요.");
+        const score = current.questions.reduce(
+          (n, q, i) => n + Number(isCorrect(answers[i], q.answer)), 0,
+        );
         tx.update(ref, "spellingQuiz.submissions." + member, {
-          answers: answers.map(a => a.trim()), score, submittedAt: new Date().toISOString(),
+          answers: answers.map(a => a.trim()),
+          score,
+          submittedAt: new Date().toISOString(),
         });
       });
+      setAnswers(["", "", ""]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "답안 제출에 실패했습니다.");
     } finally {
@@ -115,27 +175,59 @@ export default function SpellingQuiz({
     }
   }
 
+  const viewTitle = selectedDate === today ? "오늘" : selectedDate;
+  const selectableDays = view === "missed" ? missedDays : view === "history" ? allQuizDays : [];
+
   return (
     <div className="spelling-overlay" role="dialog" aria-modal="true" aria-label="가족 맞춤법 시험">
       <div className="spelling-panel">
         <header className="spelling-head">
           <div>
             <strong>매일 맞춤법 시험</strong>
-            <small>{today} · {quiz?.grade ?? "초등"}학년 수준 · 하루 3문제</small>
+            <small>하루 3문제 · 못 푼 날은 나중에 이어서 응시 가능</small>
           </div>
           <button type="button" onClick={close} aria-label="닫기">×</button>
         </header>
 
+        <nav className="spelling-view-tabs" aria-label="맞춤법 시험 보기">
+          <button className={view === "today" ? "active" : ""} onClick={() => selectView("today")}>오늘</button>
+          <button className={view === "missed" ? "active" : ""} onClick={() => selectView("missed")}>
+            밀린 문제{missedDays.length ? ` (${missedDays.length})` : ""}
+          </button>
+          <button className={view === "history" ? "active" : ""} onClick={() => selectView("history")}>지난 문제</button>
+        </nav>
+
+        {view !== "today" && (
+          <div className="spelling-day-list">
+            {selectableDays.length === 0 ? (
+              <span>{view === "missed" ? "밀린 문제가 없습니다." : "저장된 지난 문제가 없습니다."}</span>
+            ) : selectableDays.map(day => {
+              const submission = day.spellingQuiz?.submissions?.[member];
+              return (
+                <button
+                  key={day.date}
+                  className={selectedDate === day.date ? "active" : ""}
+                  onClick={() => { setSelectedDate(day.date); setAnswers(["", "", ""]); }}
+                >
+                  <b>{day.date}</b>
+                  <small>{submission ? `${submission.score}/3점` : "미응시"}</small>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {error && <div className="spelling-error" role="alert">{error}</div>}
-        {loading && !quiz && <p>오늘의 문제를 준비하고 있습니다.</p>}
-        {quiz && (
+        {loading && !activeQuiz && view === "today" && <p>오늘의 문제를 준비하고 있습니다.</p>}
+
+        {activeQuiz && (
           <>
             <div className="spelling-progress">
-              <span>{quiz.source === "ai" ? "AI 생성 문제" : "맞춤법 검증 문제 · 자동 복습"}</span>
+              <span>{viewTitle} · 초등 {activeQuiz.grade}학년 · {activeQuiz.source === "ai" ? "AI 생성" : "검증 문제"}</span>
               <strong>{mySubmission ? "완료 · " + mySubmission.score + "/3점" : "제출 전"}</strong>
             </div>
             <div className="spelling-questions">
-              {quiz.questions.map((q, i) => {
+              {activeQuiz.questions.map((q, i) => {
                 const chosen = mySubmission?.answers?.[i] ?? answers[i] ?? "";
                 const correct = mySubmission ? isCorrect(chosen, q.answer) : null;
                 return (
@@ -144,13 +236,16 @@ export default function SpellingQuiz({
                       <b>{i + 1}번</b>
                       <span>객관식</span>
                     </div>
-                    <p><span className="spelling-context-help">빈칸에 들어갈 알맞은 단어를 고르세요.</span>{spellingChoicePrompt(q)}</p>
+                    <p>
+                      <span className="spelling-context-help">빈칸에 들어갈 알맞은 단어를 고르세요.</span>
+                      {spellingChoicePrompt(q)}
+                    </p>
                     <div className="spelling-options">
                       {spellingChoices(q).map(option => (
                         <label className={chosen === option ? "selected" : ""} key={option}>
                           <input
                             type="radio"
-                            name={"spelling-" + i}
+                            name={`spelling-${selectedDate}-${i}`}
                             checked={chosen === option}
                             disabled={!!mySubmission}
                             onChange={() => setAnswers(old => old.map((v, j) => j === i ? option : v))}
@@ -161,7 +256,7 @@ export default function SpellingQuiz({
                     </div>
                     {mySubmission && (
                       <div className={"spelling-explanation " + (correct ? "correct" : "incorrect")}>
-                        <b>{correct ? "정답" : "오답"} · {q.answer}</b>
+                        <b>{correct ? "정답" : "오답"} · 내가 고른 답: {chosen || "-"} · 정답: {q.answer}</b>
                         <p>{q.explanation}</p>
                       </div>
                     )}
@@ -169,14 +264,30 @@ export default function SpellingQuiz({
                 );
               })}
             </div>
+
             {!mySubmission && (
-              <button type="button" className="spelling-submit" disabled={busy || quiz.questions.length !== 3 || quiz.questions.some(q => spellingChoices(q).length !== 2) || answers.some(a => !a.trim())}
-                onClick={() => void submit()}>
-                {busy ? "제출 중…" : "3문제 채점하고 제출"}
+              <button
+                type="button"
+                className="spelling-submit"
+                disabled={busy || activeQuiz.questions.length !== 3 ||
+                  activeQuiz.questions.some(q => spellingChoices(q).length !== 2) ||
+                  answers.some(a => !a.trim())}
+                onClick={() => void submit()}
+              >
+                {busy ? "제출 중…" : selectedDate === today ? "오늘 3문제 채점하고 제출" : selectedDate + " 밀린 3문제 채점하고 제출"}
               </button>
             )}
-            {mySubmission && <p className="spelling-hint">오늘 시험은 1회만 응시할 수 있습니다. 가족에게는 점수와 순위만 표시됩니다.</p>}
+
+            {mySubmission && (
+              <p className="spelling-hint">
+                제출한 문제는 언제든 다시 확인할 수 있습니다. 내가 고른 답·정답·해설이 함께 표시됩니다.
+              </p>
+            )}
           </>
+        )}
+
+        {view === "missed" && missedDays.length === 0 && (
+          <p className="spelling-hint">최근 1년 안에 만들어진 시험 중 미응시 문제가 없습니다.</p>
         )}
 
         <section className="spelling-leaderboard">
@@ -195,7 +306,9 @@ export default function SpellingQuiz({
               <small>{p.played}일 참여</small>
             </div>
           ))}
-          <p className="spelling-hint">동점은 참여일 수로 정합니다. 복습 문제는 이전 오답을 3·7·14일 간격으로 다시 출제합니다.</p>
+          <p className="spelling-hint">
+            밀린 문제를 나중에 제출해도 해당 날짜의 응시 기록으로 저장됩니다. 복습 문제는 이전 오답을 3·7·14일 간격으로 다시 출제합니다.
+          </p>
         </section>
       </div>
     </div>

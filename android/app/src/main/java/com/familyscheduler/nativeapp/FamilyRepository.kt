@@ -707,6 +707,7 @@ class FamilyRepository {
                                 candidate.homeworkSeriesId.isNullOrBlank() &&
                                 !event.homeworkStartDate.isNullOrBlank() &&
                                 candidate.homeworkId == event.homeworkId &&
+                                cleanHomeworkTitle(candidate.title) == cleanHomeworkTitle(event.title) &&
                                 candidate.homeworkStartDate == event.homeworkStartDate &&
                                 candidate.homeworkEndDate == event.homeworkEndDate
                         candidate.kind == "homework" &&

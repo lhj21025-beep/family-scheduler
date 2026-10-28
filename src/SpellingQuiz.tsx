@@ -14,6 +14,7 @@ const people: { id: SpellingMember; label: string }[] = [
 
 type DayRow = { date: string; spellingQuiz?: DailySpellingQuiz };
 type QuizView = "today" | "missed" | "history";
+const SPELLING_START_DAY = "2026-10-22";
 
 function weekStart(day: string): string {
   const date = new Date(day + "T12:00:00Z");
@@ -37,7 +38,9 @@ export default function SpellingQuiz({
 
   const monthlyStart = today.slice(0, 7) + "-01";
   const weeklyStart = weekStart(today);
-  const historyFrom = shiftedDay(today, -365);
+  const historyFrom = SPELLING_START_DAY > shiftedDay(today, -365)
+    ? SPELLING_START_DAY
+    : shiftedDay(today, -365);
 
   useEffect(() => {
     const ref = doc(db, "scheduleDays", today);
@@ -67,19 +70,42 @@ export default function SpellingQuiz({
     let cancelled = false;
     async function ensure() {
       try {
-        const old = await getDocs(query(
+        const existingSnap = await getDocs(query(
           collection(db, "scheduleDays"),
-          where("date", ">=", shiftedDay(today, -14)),
-          where("date", "<", today),
+          where("date", ">=", historyFrom),
+          where("date", "<=", today),
         ));
-        const previous = old.docs
-          .map(s => (s.data() as DayRow).spellingQuiz)
-          .filter((q): q is DailySpellingQuiz => !!q);
-        const generated = fallbackQuiz(today, previous);
+        const existing = new Map(
+          existingSnap.docs.map(s => {
+            const row = s.data() as DayRow;
+            return [s.id, row.spellingQuiz] as const;
+          }),
+        );
+        const previous: DailySpellingQuiz[] = [];
+        let day = historyFrom;
+
+        while (day < today) {
+          const dayRef = doc(db, "scheduleDays", day);
+          const saved = existing.get(day);
+          const live = saved ?? await runTransaction(db, async tx => {
+            const snap = await tx.get(dayRef);
+            const current = (snap.data() as DayRow | undefined)?.spellingQuiz;
+            if (current) return current;
+            const generated = fallbackQuiz(day, previous);
+            tx.set(dayRef, { date: day, spellingQuiz: generated }, { merge: true });
+            return generated;
+          });
+          previous.push(live);
+          day = shiftedDay(day, 1);
+        }
+
         await runTransaction(db, async tx => {
           const snap = await tx.get(ref);
-          if (snap.data()?.spellingQuiz) return;
+          const current = (snap.data() as DayRow | undefined)?.spellingQuiz;
+          if (current) return current;
+          const generated = fallbackQuiz(today, previous);
           tx.set(ref, { date: today, spellingQuiz: generated }, { merge: true });
+          return generated;
         });
       } catch (e) {
         if (!cancelled) {

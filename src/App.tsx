@@ -12,6 +12,7 @@ import {
   doc,
   FieldPath,
   getDoc,
+  getDocFromServer,
   getDocs,
   onSnapshot,
   query,
@@ -23,6 +24,7 @@ import {
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import SpellingQuiz from "./SpellingQuiz";
+import { uniqueRegistrations, registrationSummary } from "./registration";
 import { syncGoogleFamilyCalendar } from "./googleCalendarSync";
 import { listenForegroundPush, registerPushForMember } from "./fcm";
 
@@ -305,6 +307,8 @@ export default function App() {
   const [range, setRange] = useState<{ start: string; end: string } | null>(
     null,
   );
+  const registrationLock = useRef(false);
+  const [registrationBusy, setRegistrationBusy] = useState(false);
   const touchMoved = useRef(false);
   useEffect(
     () =>
@@ -564,10 +568,55 @@ export default function App() {
       deleteField(),
     );
   };
+  const registerUniqueEvents = async (proposed: EventItem[], editingId?: string) => {
+    const dates = [...new Set(proposed.map(e => e.start.slice(0, 10)))];
+    const existing: EventItem[] = [];
+    // Verify every target date on the server before any writes. No cache fallback.
+    for (let offset = 0; offset < dates.length; offset += 50) {
+      const snapshots = await Promise.all(dates.slice(offset, offset + 50).map(date =>
+        getDocFromServer(doc(db, "scheduleDays", date))));
+      snapshots.forEach(snap => existing.push(...Object.values((snap.data() as DayDoc | undefined)?.events ?? {})));
+    }
+    const candidates = uniqueRegistrations(proposed, existing, editingId);
+    const groups = new Map<string, EventItem[]>();
+    candidates.forEach(e => {
+      const date = e.start.slice(0, 10);
+      groups.set(date, [...(groups.get(date) ?? []), e]);
+    });
+    const entries = [...groups.entries()];
+    let saved = 0;
+    try {
+      for (let offset = 0; offset < entries.length; offset += 50) {
+        const chunk = entries.slice(offset, offset + 50);
+        saved += await runTransaction(db, async tx => {
+          // All transaction reads must precede writes; retries recheck duplicates.
+          const snapshots = await Promise.all(chunk.map(([date]) => tx.get(doc(db, "scheduleDays", date))));
+          let written = 0;
+          chunk.forEach(([date, rows], index) => {
+            const live = Object.values((snapshots[index].data() as DayDoc | undefined)?.events ?? {});
+            const accepted = uniqueRegistrations(rows, live, editingId);
+            if (!accepted.length) return;
+            const values = Object.fromEntries(accepted.map(e => [eventFieldKey(e.id), stripUndefined({
+              ...e, familyId: FAMILY_ID, createdBy: e.createdBy ?? auth.currentUser?.uid ?? "",
+            })]));
+            tx.set(doc(db, "scheduleDays", date), { date, events: values }, { merge: true });
+            written += accepted.length;
+          });
+          return written;
+        });
+      }
+    } catch {
+      throw new Error(`${saved}건 저장 후 연결이 중단되었습니다. 다시 등록하면 이미 저장된 항목은 제외됩니다.`);
+    }
+    return saved;
+  };
   const saveEvent = async (e: EventItem) => {
     if (e.googleImported) return alert("구글에서 가져온 일정은 Google Calendar에서 수정해주세요.");
     if (!e.title.trim()) return alert("일정 제목을 입력해주세요.");
     if (!e.memberIds.length) return alert("최소 한 명을 선택해주세요.");
+    if (registrationLock.current) return;
+    registrationLock.current = true;
+    setRegistrationBusy(true);
     try {
       const repeat = e.repeat ?? "none";
       const until = e.repeatEndMode === "date" ? e.repeatUntil : undefined;
@@ -582,9 +631,7 @@ export default function App() {
       const duration = e.end
         ? new Date(e.end).getTime() - new Date(e.start).getTime()
         : 3600000;
-      await Promise.all(
-        dates.map((d, i) =>
-          writeDayEvent({
+      const proposed: EventItem[] = dates.map((d, i) => ({
             ...e,
             id: i === 0 ? e.id : uid(),
             start: d,
@@ -600,18 +647,17 @@ export default function App() {
             lunarMonth: repeat === "lunarYearly" ? lunar?.month : undefined,
             lunarDay: repeat === "lunarYearly" ? lunar?.day : undefined,
             lunarLeapMonth: repeat === "lunarYearly" ? lunar?.intercalation : false,
-          }),
-        ),
-      );
+      }));
+      const saved = await registerUniqueEvents(proposed, events.some(old => old.id === e.id) ? e.id : undefined);
+
       setModal(null);
-      flash(
-        dates.length === 1
-          ? "일정을 저장했습니다."
-          : `${dates.length}개의 반복 일정을 만들었습니다.`,
-      );
+      alert(registrationSummary(proposed.length, saved));
     } catch (error) {
       console.error(error);
-      alert("일정 저장에 실패했습니다.");
+      alert(error instanceof Error ? error.message : "일정 저장에 실패했습니다.");
+    } finally {
+      registrationLock.current = false;
+      setRegistrationBusy(false);
     }
   };
   const changeEvent = async (id: string, start: string, end?: string) => {
@@ -683,29 +729,11 @@ export default function App() {
       });
     });
 
+    if (registrationLock.current) return;
+    registrationLock.current = true;
+    setRegistrationBusy(true);
     try {
-      const dates = [...new Set(proposed.map((e) => e.start.slice(0, 10)))];
-      const snaps = await Promise.all(dates.map((d) => getDoc(doc(db, "scheduleDays", dayId(d)))));
-      const existing = snaps.flatMap((snap) =>
-        snap.exists() ? Object.values((snap.data() as DayDoc).events ?? {}) : [],
-      );
-      const duplicatePairs = proposed.filter((p) =>
-        existing.some(
-          (e) =>
-            e.kind === "homework" &&
-            e.start.slice(0, 10) === p.start.slice(0, 10) &&
-            cleanHomeworkTitle(e.title) === cleanHomeworkTitle(p.title),
-        ),
-      );
-      if (duplicatePairs.length) {
-        const duplicateDates = [...new Set(duplicatePairs.map((e) => e.start.slice(0, 10)))];
-        const ok = confirm(
-          `동일한 숙제가 이미 등록된 날짜가 ${duplicateDates.length}일 있습니다.\n${duplicateDates.slice(0, 6).join(", ")}${duplicateDates.length > 6 ? " 외" : ""}\n\n그래도 중복으로 등록할까요?`,
-        );
-        if (!ok) return;
-      }
-
-      await Promise.all(proposed.map(writeDayEvent));
+      const saved = await registerUniqueEvents(proposed);
       setHomeworkOpen(false);
       setHomeworkIds([]);
       setSchoolHomeworkDetail("");
@@ -714,10 +742,13 @@ export default function App() {
       setHomeworkRepeat("none");
       setHomeworkAlternateRepeat(false);
       setHomeworkRepeatCount(1);
-      flash(`${proposed.length}개 숙제를 등록했습니다.`);
+      alert(registrationSummary(proposed.length, saved));
     } catch (e) {
       console.error(e);
-      alert("숙제 등록에 실패했습니다.");
+      alert(e instanceof Error ? e.message : "숙제 등록에 실패했습니다.");
+    } finally {
+      registrationLock.current = false;
+      setRegistrationBusy(false);
     }
   };
   const openHomeworkDelete = (e: EventItem) => {
@@ -1848,7 +1879,7 @@ export default function App() {
               </label>
             )}
             <div className="homework-modal-actions">
-              <button className="save-btn" onClick={registerHomework}>
+              <button className="save-btn" disabled={registrationBusy} onClick={registerHomework}>
                 선택한 숙제 등록
               </button>
               <button onClick={() => setManageOpen((p) => !p)}>
@@ -2325,6 +2356,7 @@ export default function App() {
                       <button onClick={() => setModal(null)}>취소</button>
                       <button
                         className="save-btn"
+                        disabled={registrationBusy}
                         onClick={() => saveEvent(modal)}
                       >
                         저장
@@ -2340,3 +2372,4 @@ export default function App() {
     </div>
   );
 }
+

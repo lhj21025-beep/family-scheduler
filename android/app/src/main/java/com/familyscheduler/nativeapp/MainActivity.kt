@@ -893,12 +893,13 @@ class MainActivity : ComponentActivity() {
                     repo.saveEvents(events) { result ->
                         runOnUiThread {
                             if (result.isSuccess) {
-                                events.forEach { AlarmScheduler.scheduleEvent(this, it) }
+                                val registered = result.getOrThrow()
+                                registered.saved.forEach { AlarmScheduler.scheduleEvent(this, it) }
                                 alert.dismiss()
-                                toast("${events.size}개 일정을 저장했습니다.")
+                                showRegistrationResult(registered)
                             } else {
                                 alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                                toast("저장하지 못했습니다.")
+                                toast(result.exceptionOrNull()?.message ?: "저장하지 못했습니다.")
                             }
                         }
                     }
@@ -1020,41 +1021,14 @@ class MainActivity : ComponentActivity() {
                 val total = count.text.toString().toIntOrNull()?.coerceIn(1, 365) ?: 1
 
                 alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                repo.checkHomeworkDuplicates(resolvedSelected, startDate, endDate, repeatCode, total, alternateRepeat.isChecked) { duplicateResult ->
+                repo.registerHomework(resolvedSelected, startDate, endDate, repeatCode, total, alternateRepeat.isChecked) { result ->
                     runOnUiThread {
-                        if (duplicateResult.isFailure) {
-                            alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                            toast("중복 숙제 확인에 실패했습니다.")
-                            return@runOnUiThread
-                        }
-                        val duplicates = duplicateResult.getOrDefault(emptyList())
-                        val registerNow = {
-                            repo.registerHomework(resolvedSelected, startDate, endDate, repeatCode, total, alternateRepeat.isChecked) { result ->
-                                runOnUiThread {
-                                    if (result.isSuccess) {
-                                        alert.dismiss()
-                                        toast("${result.getOrDefault(0)}개 숙제를 등록했습니다.")
-                                    } else {
-                                        alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                                        toast("숙제 등록에 실패했습니다.")
-                                    }
-                                }
-                            }
-                        }
-                        if (duplicates.isEmpty()) {
-                            registerNow()
+                        if (result.isSuccess) {
+                            alert.dismiss()
+                            showRegistrationResult(result.getOrThrow())
                         } else {
                             alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                            val preview = duplicates.take(6).joinToString("\n") { "${it.first} · ${it.second}" }
-                            AlertDialog.Builder(this@MainActivity)
-                                .setTitle("중복 숙제 확인")
-                                .setMessage("동일한 숙제가 이미 등록되어 있습니다.\n\n$preview${if (duplicates.size > 6) "\n외 ${duplicates.size - 6}개" else ""}\n\n그래도 중복으로 등록할까요?")
-                                .setPositiveButton("그래도 등록") { _, _ ->
-                                    alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                                    registerNow()
-                                }
-                                .setNegativeButton("취소", null)
-                                .show()
+                            toast(result.exceptionOrNull()?.message ?: "숙제 등록에 실패했습니다.")
                         }
                     }
                 }
@@ -1178,36 +1152,14 @@ class MainActivity : ComponentActivity() {
                 val repeatCode = repeatCodes[repeat.selectedItemPosition]
                 val total = count.text.toString().toIntOrNull()?.coerceIn(1, 365) ?: 1
                 alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                repo.checkHomeworkDuplicates(resolvedSelected, startDate, endDate, repeatCode, total, alternateRepeat.isChecked) { duplicateResult ->
+                repo.registerHomework(resolvedSelected, startDate, endDate, repeatCode, total, alternateRepeat.isChecked) { result ->
                     runOnUiThread {
-                        if (duplicateResult.isFailure) {
-                            alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                            toast("중복 숙제 확인에 실패했습니다.")
-                            return@runOnUiThread
-                        }
-                        val duplicates = duplicateResult.getOrDefault(emptyList())
-                        val registerNow = {
-                            repo.registerHomework(resolvedSelected, startDate, endDate, repeatCode, total, alternateRepeat.isChecked) { result ->
-                                runOnUiThread {
-                                    alert.dismiss()
-                                    toast(if (result.isSuccess) "${result.getOrDefault(0)}개 숙제를 등록했습니다." else "숙제 등록에 실패했습니다.")
-                                }
-                            }
-                        }
-                        if (duplicates.isEmpty()) {
-                            registerNow()
+                        if (result.isSuccess) {
+                            alert.dismiss()
+                            showRegistrationResult(result.getOrThrow())
                         } else {
                             alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                            val preview = duplicates.take(6).joinToString("\n") { "${it.first} · ${it.second}" }
-                            AlertDialog.Builder(this@MainActivity)
-                                .setTitle("중복 숙제 확인")
-                                .setMessage("동일한 숙제가 이미 등록되어 있습니다.\n\n$preview${if (duplicates.size > 6) "\n외 ${duplicates.size - 6}개" else ""}\n\n그래도 중복으로 등록할까요?")
-                                .setPositiveButton("그래도 등록") { _, _ ->
-                                    alert.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                                    registerNow()
-                                }
-                                .setNegativeButton("취소", null)
-                                .show()
+                            toast(result.exceptionOrNull()?.message ?: "숙제 등록에 실패했습니다.")
                         }
                     }
                 }
@@ -1503,5 +1455,11 @@ class MainActivity : ComponentActivity() {
     private fun gridParams(height: Int) = GridLayout.LayoutParams().apply { width = 0; this.height = height; columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f) }
     private fun rounded(color: Int, radius: Float, stroke: Int? = null) = GradientDrawable().apply { setColor(color); cornerRadius = dp(radius.toInt()).toFloat(); stroke?.let { setStroke(dp(1), it) } }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+    private fun showRegistrationResult(result: RegistrationResult) {
+        AlertDialog.Builder(this).setTitle("등록 결과")
+            .setMessage(result.summary()).setPositiveButton("확인", null).show()
+    }
+
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
 }
+

@@ -91,4 +91,50 @@ class ModelsTest {
         assertTrue(FamilyEvent.fromMap(event.toMap())?.alternateRepeat == true)
         assertFalse(FamilyEvent.fromMap(event.toMap() - "alternateRepeat")!!.alternateRepeat)
     }
+
+    @Test
+    fun registration_skips_two_of_one_hundred_including_distant_future() {
+        listOf("event", "homework").forEach { kind ->
+            val rows = (0 until 100).map { index -> FamilyEvent(
+                id = "new-$index", title = "엘리하이(영어)", kind = kind,
+                start = "${LocalDate.of(2026, 11, 4).plusWeeks(index.toLong())}T18:00",
+                memberIds = listOf("son"), homeworkId = if (kind == "homework") "english" else null,
+            ) }
+            val existing = listOf(rows[2].copy(id = "old-2"), rows[98].copy(id = "old-98"))
+            val accepted = uniqueRegistrations(rows, existing)
+            assertEquals(98, accepted.size)
+            assertFalse(accepted.contains(rows[2]))
+            assertFalse(accepted.contains(rows[98]))
+            assertEquals(100, uniqueRegistrations(rows, emptyList()).size)
+            assertEquals(0, uniqueRegistrations(rows, rows).size)
+            assertEquals("100건 중 2건은 중복으로 제외하고 98건 등록했습니다.", RegistrationResult(100, accepted).summary())
+        }
+    }
+
+    @Test
+    fun registration_preserves_different_times_people_and_school_details() {
+        val event = FamilyEvent(title = "수영", start = "2026-11-11T18:00", memberIds = listOf("son"))
+        assertTrue(sameRegistration(event, event.copy(start = "2026-11-11T18:00:00")))
+        assertFalse(sameRegistration(event, event.copy(start = "2026-11-11T19:00")))
+        assertFalse(sameRegistration(event, event.copy(memberIds = listOf("me"))))
+        assertFalse(sameRegistration(event, event.copy(allDay = true)))
+        assertFalse(sameRegistration(event, event.copy(kind = "approval-alert")))
+        assertFalse(sameRegistration(event, event.copy(title = "축구")))
+        assertTrue(sameRegistration(event.copy(memberIds = listOf("me", "son")), event.copy(memberIds = listOf("son", "me"))))
+        assertTrue(sameRegistration(event.copy(allDay = true), event.copy(allDay = true, start = "2026-11-11T00:00")))
+        val homework = event.copy(kind = "homework", homeworkId = "english", title = "📝 영어")
+        assertTrue(sameRegistration(homework, homework.copy(title = "✅ 영어", kind = "homework-complete")))
+        assertTrue(sameRegistration(homework, homework.copy(title = "영어 학습")))
+        assertFalse(sameRegistration(homework.copy(homeworkId = "school-other", title = "학교숙제 · 수학 20쪽"),
+            homework.copy(homeworkId = "school-other", title = "학교숙제 · 과학 조사")))
+    }
+
+    @Test
+    fun registration_rechecks_concurrent_inserts_and_overlapping_blocks() {
+        val row = FamilyEvent(title = "영어", kind = "homework", start = "2026-11-11T00:00", homeworkId = "english")
+        val preflight = uniqueRegistrations(listOf(row, row.copy(id = "overlap")), emptyList())
+        assertEquals(1, preflight.size)
+        assertEquals(0, uniqueRegistrations(preflight, listOf(row.copy(id = "concurrent"))).size)
+    }
 }
+

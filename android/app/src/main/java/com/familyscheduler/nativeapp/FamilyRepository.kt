@@ -154,33 +154,63 @@ class FamilyRepository {
             .addOnFailureListener { done(Result.failure(it)) }
     }
 
-    fun saveEvents(events: List<FamilyEvent>, done: (Result<Int>) -> Unit) {
-        if (events.isEmpty()) return done(Result.success(0))
-        val groups = events.groupBy { it.date }.entries.toList()
+    fun saveEvents(events: List<FamilyEvent>, done: (Result<RegistrationResult>) -> Unit) {
+        if (events.isEmpty()) return done(Result.success(RegistrationResult(0, emptyList())))
+        val dates = events.map { it.date }.distinct()
+        val existing = mutableListOf<FamilyEvent>()
+        val saved = mutableListOf<FamilyEvent>()
 
-        fun commitChunk(startIndex: Int) {
-            if (startIndex >= groups.size) {
-                refreshWidgets()
-                done(Result.success(events.size))
-                return
-            }
-            val batch = db.batch()
-            groups.drop(startIndex).take(400).forEach { (date, dayEvents) ->
-                val values = dayEvents.associate { event ->
-                    safeKey(event.id) to event.copy(createdBy = event.createdBy ?: auth.currentUser?.uid).toMap()
+        fun writeCandidates() {
+            val groups = uniqueRegistrations(events, existing).groupBy { it.date }.entries.toList()
+            fun commitChunk(offset: Int) {
+                if (offset >= groups.size) {
+                    refreshWidgets()
+                    done(Result.success(RegistrationResult(events.size, saved.toList())))
+                    return
                 }
-                batch.set(
-                    db.collection("scheduleDays").document(date),
-                    mapOf("date" to date, "events" to values),
-                    SetOptions.merge(),
-                )
+                val chunk = groups.drop(offset).take(50)
+                db.runTransaction { tx ->
+                    // Recheck on every retry; all reads precede writes.
+                    val snapshots = chunk.map { tx.get(db.collection("scheduleDays").document(it.key)) }
+                    val accepted = mutableListOf<FamilyEvent>()
+                    chunk.forEachIndexed { index, (date, rows) ->
+                        val unique = uniqueRegistrations(rows, parseEvents(snapshots[index]))
+                        if (unique.isNotEmpty()) {
+                            val values = unique.associate { row -> safeKey(row.id) to
+                                row.copy(createdBy = row.createdBy ?: auth.currentUser?.uid).toMap() }
+                            tx.set(db.collection("scheduleDays").document(date),
+                                mapOf("date" to date, "events" to values), SetOptions.merge())
+                            accepted += unique
+                        }
+                    }
+                    accepted.toList()
+                }.addOnSuccessListener { accepted ->
+                    saved += accepted
+                    commitChunk(offset + 50)
+                }.addOnFailureListener { error ->
+                    refreshWidgets()
+                    done(Result.failure(IllegalStateException(
+                        "${saved.size}건 저장 후 연결이 중단되었습니다. 다시 등록하면 이미 저장된 항목은 제외됩니다.", error)))
+                }
             }
-            batch.commit()
-                .addOnSuccessListener { commitChunk(startIndex + 400) }
-                .addOnFailureListener { done(Result.failure(it)) }
+            commitChunk(0)
         }
 
-        commitChunk(0)
+        // Check every requested date on the server before the first write.
+        fun checkChunk(offset: Int) {
+            if (offset >= dates.size) { writeCandidates(); return }
+            val reads = dates.drop(offset).take(50).map { date ->
+                db.collection("scheduleDays").document(date).get(com.google.firebase.firestore.Source.SERVER)
+            }
+            com.google.android.gms.tasks.Tasks.whenAllSuccess<DocumentSnapshot>(reads)
+                .addOnSuccessListener { snapshots ->
+                    snapshots.forEach { existing += parseEvents(it) }
+                    checkChunk(offset + 50)
+                }.addOnFailureListener { error ->
+                    done(Result.failure(IllegalStateException("전체 날짜의 중복 확인에 실패해 등록하지 않았습니다. 연결을 확인하고 다시 시도해 주세요.", error)))
+                }
+        }
+        checkChunk(0)
     }
 
     fun moveOrSaveEvent(old: FamilyEvent?, next: FamilyEvent, done: (Result<Unit>) -> Unit) {
@@ -413,60 +443,9 @@ class FamilyRepository {
         }.addOnFailureListener { done(Result.failure(it)) }
     }
 
-    fun checkHomeworkDuplicates(
-        selected: List<Homework>, start: LocalDate, end: LocalDate,
-        repeat: String, repeatCount: Int, alternateRepeat: Boolean = false, done: (Result<List<Pair<String, String>>>) -> Unit
-    ) {
-        val blockLength = java.time.temporal.ChronoUnit.DAYS.between(start, end)
-        val proposed = selected.flatMap { homework ->
-            repeatStarts(start, repeat, if (repeat == "none") 1 else repeatCount, alternate = alternateRepeat).flatMap { occurrenceStart ->
-                val occurrenceEnd = occurrenceStart.plusDays(blockLength)
-                datesBetween(occurrenceStart, occurrenceEnd).map { day ->
-                    Triple(day.toString(), homework.id, homework.name.trim())
-                }
-            }
-        }
-        if (proposed.isEmpty()) return done(Result.success(emptyList()))
-
-        val dates = proposed.map { it.first }.distinct()
-        val refs = dates.map { db.collection("scheduleDays").document(it) }
-        val reads = refs.map { it.get(com.google.firebase.firestore.Source.SERVER) }
-
-        com.google.android.gms.tasks.Tasks.whenAllSuccess<DocumentSnapshot>(reads)
-            .addOnSuccessListener { snapshots ->
-                val byDate = snapshots.associate { snap ->
-                    snap.id to parseEvents(snap).filter { it.kind == "homework" }
-                }
-                val duplicates = proposed.filter { (date, homeworkId, name) ->
-                    byDate[date].orEmpty().any { old ->
-                        old.homeworkId == homeworkId ||
-                            cleanHomeworkTitle(old.title).trim() == name
-                    }
-                }.map { it.first to it.third }.distinct()
-                done(Result.success(duplicates))
-            }
-            .addOnFailureListener {
-                // 서버 조회가 일시적으로 실패하면 캐시 조회로 한 번 더 확인한다.
-                com.google.android.gms.tasks.Tasks.whenAllSuccess<DocumentSnapshot>(refs.map { ref -> ref.get() })
-                    .addOnSuccessListener { snapshots ->
-                        val byDate = snapshots.associate { snap ->
-                            snap.id to parseEvents(snap).filter { it.kind == "homework" }
-                        }
-                        val duplicates = proposed.filter { (date, homeworkId, name) ->
-                            byDate[date].orEmpty().any { old ->
-                                old.homeworkId == homeworkId ||
-                                    cleanHomeworkTitle(old.title).trim() == name
-                            }
-                        }.map { it.first to it.third }.distinct()
-                        done(Result.success(duplicates))
-                    }
-                    .addOnFailureListener { fallbackError -> done(Result.failure(fallbackError)) }
-            }
-    }
-
     fun registerHomework(
         selected: List<Homework>, start: LocalDate, end: LocalDate,
-        repeat: String, repeatCount: Int, alternateRepeat: Boolean = false, done: (Result<Int>) -> Unit
+        repeat: String, repeatCount: Int, alternateRepeat: Boolean = false, done: (Result<RegistrationResult>) -> Unit
     ) {
         val blockLength = java.time.temporal.ChronoUnit.DAYS.between(start, end)
         val events = selected.flatMap { homework ->
@@ -484,32 +463,7 @@ class FamilyRepository {
                 }
             }
         }
-        if (events.isEmpty()) return done(Result.success(0))
-        val groups = events.groupBy { it.date }.entries.toList()
-
-        fun commitChunk(startIndex: Int) {
-            if (startIndex >= groups.size) {
-                refreshWidgets()
-                done(Result.success(events.size))
-                return
-            }
-            val batch = db.batch()
-            groups.drop(startIndex).take(400).forEach { (date, dayEvents) ->
-                val values = dayEvents.associate {
-                    safeKey(it.id) to it.copy(createdBy = auth.currentUser?.uid).toMap()
-                }
-                batch.set(
-                    db.collection("scheduleDays").document(date),
-                    mapOf("date" to date, "events" to values),
-                    SetOptions.merge(),
-                )
-            }
-            batch.commit()
-                .addOnSuccessListener { commitChunk(startIndex + 400) }
-                .addOnFailureListener { done(Result.failure(it)) }
-        }
-
-        commitChunk(0)
+        saveEvents(events, done)
     }
 
     fun requestHomeworkApproval(event: FamilyEvent, done: (Result<Unit>) -> Unit) {
@@ -1078,3 +1032,4 @@ class FamilyRepository {
 
     private fun refreshWidgets() = TodayWidgetProvider.requestRefresh()
 }
+

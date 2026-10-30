@@ -272,3 +272,40 @@ fun repeatStarts(start: LocalDate, repeat: String, count: Int, until: LocalDate?
 }
 
 fun nowIso(): String = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
+
+
+// Identical duplicate rules to web src/registration.ts.
+fun sameRegistration(a: FamilyEvent, b: FamilyEvent): Boolean {
+    fun normalized(value: String) = value.trim().replace(Regex("\\s+"), " ")
+    fun homework(e: FamilyEvent) = e.kind == "homework" || e.kind == "homework-complete"
+    if (a.date != b.date || a.memberIds.toSet() != b.memberIds.toSet()) return false
+    if (homework(a) && homework(b)) {
+        val first = normalized(cleanHomeworkTitle(a.title))
+        val second = normalized(cleanHomeworkTitle(b.title))
+        val detailed = a.homeworkId == "school-other" || b.homeworkId == "school-other" ||
+            first.startsWith("학교숙제 ·") || second.startsWith("학교숙제 ·")
+        return first == second || (!detailed && !a.homeworkId.isNullOrEmpty() && a.homeworkId == b.homeworkId)
+    }
+    return a.kind == "event" && b.kind == "event" && normalized(a.title) == normalized(b.title) &&
+        a.allDay == b.allDay && (a.allDay || a.start.take(16) == b.start.take(16))
+}
+
+fun uniqueRegistrations(proposed: List<FamilyEvent>, existing: List<FamilyEvent>): List<FamilyEvent> {
+    val byDay = existing.groupBy { it.date }.mapValues { it.value.toMutableList() }.toMutableMap()
+    val accepted = mutableListOf<FamilyEvent>()
+    proposed.forEach { row ->
+        val peers = byDay.getOrPut(row.date) { mutableListOf() }
+        if (peers.none { sameRegistration(row, it) }) {
+            accepted += row
+            peers += row
+        }
+    }
+    return accepted
+}
+
+data class RegistrationResult(val total: Int, val saved: List<FamilyEvent>) {
+    val skipped: Int get() = total - saved.size
+    fun summary(): String = if (skipped > 0)
+        "${total}건 중 ${skipped}건은 중복으로 제외하고 ${saved.size}건 등록했습니다."
+        else "${saved.size}건 등록했습니다."
+}

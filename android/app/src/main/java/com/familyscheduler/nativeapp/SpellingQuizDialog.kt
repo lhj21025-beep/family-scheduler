@@ -26,7 +26,6 @@ class SpellingQuizDialog(
     private val spellingStartDay = LocalDate.of(2026, 10, 22)
     private var selectedDay = today
     private val dayId: String get() = selectedDay.toString()
-    private val doc get() = db.collection("scheduleDays").document(dayId)
     private val box = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(18, 16, 18, 18) }
     private val members = listOf("me" to "아빠", "wife" to "엄마", "son" to "강천")
     private lateinit var dialog: AlertDialog
@@ -50,35 +49,7 @@ class SpellingQuizDialog(
         }
     }
 
-    private val bank = listOf(
-        Item("n4-01",4,"choice","‘이게 무슨 ___이야?’에 알맞은 말은?",listOf("웬일","왠일"),"웬일","‘웬일’이 바른 표기예요."),
-        Item("n4-02",4,"choice","‘___ 동안 못 만났니?’에 알맞은 말은?",listOf("며칠","몇일"),"며칠","‘며칠’이 맞는 표기예요."),
-        Item("n4-03",4,"choice","‘집에 가도 ___.’에 알맞은 말은?",listOf("돼","되"),"돼","‘돼’는 ‘되어’의 준말이에요."),
-        Item("n4-11",4,"choice","‘나는 너보다 시험 점수가 ___.’에 알맞은 말은?",listOf("낮다","낫다"),"낮다","점수가 높지 않다는 뜻은 ‘낮다’예요."),
-        Item("n4-04",4,"choice","‘학교에 ___ 가.’에 알맞은 말은?",listOf("안","않"),"안","부정 부사는 ‘안’이에요."),
-        Item("n4-05",4,"choice","‘밥을 먹고 ___를 했다.’",listOf("설거지","설겆이"),"설거지","‘설거지’가 표준어예요."),
-        Item("n4-06",4,"choice","‘___를 베고 잤다.’",listOf("베개","배게"),"베개","‘베개’가 바른 표기예요."),
-        Item("n4-07",4,"write","‘이게 왠일이야?’에서 틀린 낱말을 바로 쓰세요.",emptyList(),"웬일","‘웬일’이 맞아요."),
-        Item("n4-08",4,"write","‘떡복이를 먹었다.’에서 틀린 낱말을 바로 쓰세요.",emptyList(),"떡볶이","‘떡볶이’가 바른 표기예요."),
-        Item("n4-09",4,"write","‘몇일 동안 놀았니?’에서 틀린 낱말을 바로 쓰세요.",emptyList(),"며칠","‘며칠’이 올바른 표기예요."),
-        Item("n4-10",4,"write","‘오랫만에 만났다.’에서 틀린 낱말을 바로 쓰세요.",emptyList(),"오랜만에","‘오랜만에’가 맞아요."),
-        Item("n5-01",5,"choice","‘내가 내일 전화___.’에 알맞은 말은?",listOf("할게","할께"),"할게","약속의 어미는 ‘-ㄹ게’예요."),
-        Item("n5-02",5,"choice","‘선생님, 내일 ___.’",listOf("뵙겠습니다","봽겠습니다"),"뵙겠습니다","‘뵙다’를 활용한 말이에요."),
-        Item("n5-03",5,"choice","‘___ 생각이 났다.’",listOf("문득","문뜩"),"문득","‘문득’이 바른 표현이에요."),
-        Item("n5-04",5,"choice","‘책상을 ___ 닦았다.’",listOf("깨끗이","깨끗히"),"깨끗이","‘깨끗이’가 맞아요."),
-        Item("n5-05",5,"choice","‘손가락으로 시계를 ___.’",listOf("가리켰다","가르쳤다"),"가리켰다","짚어 보이는 것은 ‘가리키다’예요."),
-        Item("n5-06",5,"write","‘내일 꼭 갈께.’에서 틀린 낱말을 바로 쓰세요.",emptyList(),"갈게","약속의 어미는 ‘-ㄹ게’예요."),
-        Item("n5-07",5,"write","‘문뜩 좋은 생각이 났다.’에서 틀린 낱말을 바로 쓰세요.",emptyList(),"문득","‘문득’이 맞아요."),
-        Item("n5-08",5,"write","‘깨끗히 닦았다.’에서 틀린 낱말을 바로 쓰세요.",emptyList(),"깨끗이","‘깨끗이’가 맞아요."),
-        Item("n6-01",6,"choice","‘집 ___을 쓸었다.’",listOf("안팎","않팎"),"안팎","‘안팎’이 표준어예요."),
-        Item("n6-02",6,"choice","‘노력의 ___를 받았다.’",listOf("대가","댓가"),"대가","‘대가’가 표준어예요."),
-        Item("n6-03",6,"choice","‘___ 생각해 보았다.’",listOf("곰곰이","곰곰히"),"곰곰이","‘곰곰이’라고 써요."),
-        Item("n6-04",6,"choice","‘눈에 ___이 끼었다.’",listOf("눈곱","눈꼽"),"눈곱","‘눈곱’이 맞아요."),
-        Item("n6-05",6,"choice","‘위험을 ___ 도전했다.’",listOf("무릅쓰고","무릎쓰고"),"무릅쓰고","‘무릅쓰다’를 활용한 표현이에요."),
-        Item("n6-06",6,"write","‘댓가를 바란 것은 아니다.’에서 틀린 낱말을 바로 쓰세요.",emptyList(),"대가","‘대가’가 맞아요."),
-        Item("n6-07",6,"write","‘곰곰히 생각했다.’에서 틀린 낱말을 바로 쓰세요.",emptyList(),"곰곰이","‘곰곰이’라고 써요."),
-        Item("n6-08",6,"write","‘눈꼽이 끼었다.’에서 틀린 낱말을 바로 쓰세요.",emptyList(),"눈곱","‘눈곱’이 맞아요.")
-    )
+    private val bank = expandedSpellingBank.map(Item::fromMap)
 
     // AI exams are already multiple choice. Earlier writing questions are
     // shown as two-choice questions without changing their saved answer/score.
@@ -166,9 +137,7 @@ class SpellingQuizDialog(
             setPadding(8, 14, 8, 14)
             if (bold) typeface = Typeface.DEFAULT_BOLD
         }
-    private fun normalise(value: String): String =
-        value.trim().replace(Regex("[\\s.,!?\"'‘’“”]"), "").lowercase()
-    private fun correct(actual: String, expected: String): Boolean = normalise(actual) == normalise(expected)
+    private fun correct(actual: String, expected: String) = SpellingContent.correct(actual, expected)
 
     fun show() {
         box.addView(text("오늘의 맞춤법 문제를 불러오는 중…"))
@@ -183,64 +152,42 @@ class SpellingQuizDialog(
 
     private fun load(day: LocalDate = selectedDay) {
         selectedDay = day
-        doc.get().addOnSuccessListener { snap ->
+        val target = db.collection("scheduleDays").document(day.toString())
+        box.removeAllViews()
+        box.addView(text("문제를 준비하고 있습니다…"))
+        target.get().addOnSuccessListener { snap ->
+            if (selectedDay != day) return@addOnSuccessListener
             val quiz = snap.get("spellingQuiz") as? Map<*, *>
-            if (quiz != null) render(quiz)
-            else if (selectedDay == today) createFallback()
-            else showError(dayId + " 시험 기록을 찾지 못했습니다.")
-        }.addOnFailureListener { error -> showError("시험을 불러오지 못했습니다: " + error.message) }
-    }
-
-    private fun createFallback() {
-        val weekAgo = listOf(3L, 7L, 14L).map { day ->
-            db.collection("scheduleDays").document(today.minusDays(day).toString())
-        }
-        com.google.android.gms.tasks.Tasks.whenAllSuccess<com.google.firebase.firestore.DocumentSnapshot>(
-            weekAgo.map { it.get() }
-        ).addOnSuccessListener { old ->
-            val reviewed = old.flatMap { snap ->
-                val q = snap.get("spellingQuiz") as? Map<*, *> ?: return@flatMap emptyList()
-                val questions = (q["questions"] as? List<*>)?.mapNotNull {
-                    (it as? Map<*, *>)?.let(Item::fromMap)
-                }.orEmpty()
-                val submissions = q["submissions"] as? Map<*, *> ?: emptyMap<String, Any>()
-                questions.filterIndexed { i, item ->
-                    submissions.values.any { raw ->
-                        val answers = (raw as? Map<*, *>)?.get("answers") as? List<*>
-                        answers != null && !correct(answers.getOrNull(i) as? String ?: "", item.answer)
-                    }
-                }
-            }
-            val sorted = bank.filter { it.grade == grade() }
-                .sortedBy { (dayId + it.id).hashCode().toUInt().toLong() }
-            val selected = sorted.filter { it.kind == "choice" }.take(3).toMutableList()
-            val review = reviewed.firstOrNull { r ->
-                selected.none { it.id == r.id } && optionsFor(r).size == 2
-            }
-            if (review != null && selected.size == 3) {
-                selected[2] = review.copy(
-                    kind = "choice",
-                    prompt = choicePrompt(review),
-                    options = optionsFor(review),
+            if (SpellingContent.needsUpgrade(quiz)) {
+                ensurePastQuizzes(
+                    done = { if (selectedDay == day) createFallback(day) },
+                    fail = { e -> if (selectedDay == day) showError("지난 문제 준비에 실패했습니다: " + e.message) },
                 )
             }
-            val payload = mapOf(
-                "date" to dayId, "grade" to grade(), "source" to "curated",
-                "questions" to selected.map { item ->
-                    if (item.kind == "choice" && (dayId + item.id).hashCode() % 2 == 0)
-                        item.copy(options = item.options.reversed()).toMap()
-                    else item.toMap()
-                }, "submissions" to emptyMap<String, Any>(),
-            )
-            db.runTransaction { tx ->
-                val existing = tx.get(doc)
-                if (!existing.contains("spellingQuiz")) {
-                    tx.set(doc, mapOf("date" to dayId, "spellingQuiz" to payload), SetOptions.merge())
+            else if (quiz != null) render(quiz)
+        }.addOnFailureListener { error -> if (selectedDay == day) showError("시험을 불러오지 못했습니다: " + error.message) }
+    }
+
+    private fun createFallback(day: LocalDate) {
+        val target = db.collection("scheduleDays").document(day.toString())
+        db.collection("scheduleDays").whereGreaterThanOrEqualTo("date", day.minusDays(30).toString())
+            .whereLessThan("date", day.toString()).get().addOnSuccessListener { snapshots ->
+                val history = snapshots.documents.mapNotNull { snap ->
+                    (snap.get("spellingQuiz") as? Map<*, *>)?.let { snap.id to it }
+                }.toMap()
+                val payload = try { fallbackPayload(day, history) } catch (e: Exception) {
+                    if (selectedDay == day) showError(e.message ?: "문제 생성 실패")
+                    return@addOnSuccessListener
                 }
-                null
-            }.addOnSuccessListener { load(selectedDay) }
-                .addOnFailureListener { e -> showError("문제를 만들지 못했습니다: " + e.message) }
-        }.addOnFailureListener { error -> showError("복습 문제 확인에 실패했습니다: " + error.message) }
+                db.runTransaction { tx ->
+                    val existing = tx.get(target).get("spellingQuiz") as? Map<*, *>
+                    if (SpellingContent.needsUpgrade(existing)) {
+                        tx.set(target, mapOf("date" to day.toString(), "spellingQuiz" to payload), SetOptions.merge())
+                        payload
+                    } else existing
+                }.addOnSuccessListener { quiz -> if (selectedDay == day && quiz != null) render(quiz) }
+                    .addOnFailureListener { e -> if (selectedDay == day) showError("문제를 만들지 못했습니다: " + e.message) }
+            }.addOnFailureListener { error -> if (selectedDay == day) showError("최근 출제 기록 확인에 실패했습니다: " + error.message) }
     }
 
     private fun showError(message: String) {
@@ -262,7 +209,7 @@ class SpellingQuizDialog(
         val sourceDescription = if (quiz["source"] == "ai") {
             "Gemini AI 자동 출제"
         } else {
-            "검증된 맞춤법 문제은행 · AI 미생성 시 자동 대체"
+            "검토된 맞춤법 문제은행 · 128문항"
         }
         addHistoryControls()
         box.addView(text(dayId + " · 초등 " + (quiz["grade"] ?: grade()).toString() +
@@ -294,7 +241,7 @@ class SpellingQuizDialog(
             box.addView(group)
             if (mine != null) {
                 val success = correct(previous, item.answer)
-                box.addView(text((if (success) "정답" else "오답") + " · " + item.answer + "\n" + item.explanation, 13f))
+                box.addView(text((if (success) "정답" else "오답") + " · " + item.answer + "\n" + SpellingContent.explanation(item.answer, item.explanation), 13f))
             }
         }
         if (mine == null) {
@@ -310,7 +257,7 @@ class SpellingQuizDialog(
                 }
             })
         } else {
-            box.addView(text("제출한 문제는 언제든 다시 확인할 수 있습니다.\n내가 고른 답·정답·해설을 함께 볼 수 있고, 틀린 문제는 3일·7일·14일 후 복습에 활용됩니다.", 12f))
+            box.addView(text("제출한 문제는 언제든 다시 확인할 수 있습니다.\n내가 고른 답·정답·해설을 함께 볼 수 있고, 새 시험은 최근 30일의 출제 내용을 피합니다.", 12f))
         }
         box.addView(text("가족 주간·월간 순위", 17f, true))
         val toggles = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
@@ -413,10 +360,9 @@ class SpellingQuizDialog(
             .whereLessThanOrEqualTo("date", end.toString())
             .get()
             .addOnSuccessListener { snapshots ->
-                val existing = snapshots.documents
-                    .filter { it.get("spellingQuiz") != null }
-                    .map { it.id }
-                    .toHashSet()
+                val history = snapshots.documents.mapNotNull { snap ->
+                    (snap.get("spellingQuiz") as? Map<*, *>)?.let { snap.id to it }
+                }.toMap().toMutableMap()
                 val dates = generateSequence(start) { it.plusDays(1) }
                     .takeWhile { !it.isAfter(end) }
                     .toList()
@@ -427,23 +373,27 @@ class SpellingQuizDialog(
                         return
                     }
                     val day = dates[index]
-                    if (day.toString() in existing) {
+                    if (!SpellingContent.needsUpgrade(history[day.toString()])) {
                         createAt(index + 1)
                         return
                     }
                     val target = db.collection("scheduleDays").document(day.toString())
-                    val payload = fallbackPayload(day)
+                    val payload = fallbackPayload(day, history)
                     db.runTransaction { tx ->
                         val snap = tx.get(target)
-                        if (!snap.contains("spellingQuiz")) {
+                        val live = snap.get("spellingQuiz") as? Map<*, *>
+                        if (SpellingContent.needsUpgrade(live)) {
                             tx.set(
                                 target,
                                 mapOf("date" to day.toString(), "spellingQuiz" to payload),
                                 SetOptions.merge(),
                             )
-                        }
-                        null
-                    }.addOnSuccessListener { createAt(index + 1) }
+                            payload
+                        } else live
+                    }.addOnSuccessListener { live ->
+                        if (live != null) history[day.toString()] = live
+                        createAt(index + 1)
+                    }
                         .addOnFailureListener { fail(it) }
                 }
                 createAt(0)
@@ -451,33 +401,17 @@ class SpellingQuizDialog(
             .addOnFailureListener { fail(it) }
     }
 
-    private fun fallbackPayload(day: LocalDate): Map<String, Any> {
-        val dayText = day.toString()
-        val selected = bank
-            .filter { it.grade == grade(day) && optionsFor(it).size == 2 }
-            .sortedBy { (dayText + it.id).hashCode().toUInt().toLong() }
-            .take(3)
-            .map { item ->
-                val choices = optionsFor(item)
-                val options = if ((dayText + item.id).hashCode() % 2 == 0) choices.reversed() else choices
-                item.copy(
-                    kind = "choice",
-                    prompt = choicePrompt(item),
-                    options = options,
-                ).toMap()
-            }
-        return mapOf(
-            "date" to dayText,
-            "grade" to grade(day),
-            "source" to "curated",
-            "questions" to selected,
-            "submissions" to emptyMap<String, Any>(),
-        )
-    }
+    private fun fallbackPayload(day: LocalDate, history: Map<String, Map<*, *>>): Map<String, Any> = mapOf(
+        "date" to day.toString(), "grade" to grade(day), "bankVersion" to SpellingContent.VERSION,
+        "source" to "curated", "questions" to SpellingContent.select(day, history),
+        "submissions" to emptyMap<String, Any>(),
+    )
 
     private fun save(questions: List<Item>, picks: List<String>) {
+        val targetDay = selectedDay
+        val target = db.collection("scheduleDays").document(targetDay.toString())
         db.runTransaction { tx ->
-            val snap = tx.get(doc)
+            val snap = tx.get(target)
             val live = snap.get("spellingQuiz") as? Map<*, *> ?: error("오늘 시험이 없습니다.")
             val currentQuestions = (live["questions"] as? List<*>)?.mapNotNull {
                 (it as? Map<*, *>)?.let(Item::fromMap)
@@ -486,11 +420,11 @@ class SpellingQuizDialog(
             val submissions = live["submissions"] as? Map<*, *> ?: emptyMap<String, Any>()
             if (submissions[member] != null) error("이미 제출한 시험입니다.")
             val score = questions.indices.count { correct(picks[it], questions[it].answer) }
-            tx.update(doc, "spellingQuiz.submissions." + member, mapOf(
+            tx.update(target, "spellingQuiz.submissions." + member, mapOf(
                 "answers" to picks, "score" to score, "submittedAt" to java.time.Instant.now().toString(),
             ))
             score
-        }.addOnSuccessListener { load() }
+        }.addOnSuccessListener { if (selectedDay == targetDay) load(targetDay) }
             .addOnFailureListener { e -> showError("제출에 실패했습니다: " + e.message) }
     }
 
@@ -523,3 +457,4 @@ class SpellingQuizDialog(
             }
     }
 }
+

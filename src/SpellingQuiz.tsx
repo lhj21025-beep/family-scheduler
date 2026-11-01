@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { collection, doc, getDocs, onSnapshot, query, runTransaction, where } from "firebase/firestore";
 import { db } from "./firebase";
 import {
-  DailySpellingQuiz, SpellingMember, fallbackQuiz, isCorrect, kstDay, shiftedDay, spellingChoices, spellingChoicePrompt,
+  DailySpellingQuiz, SpellingMember, fallbackQuiz, isCorrect, kstDay, shiftedDay, spellingChoices, spellingChoicePrompt, needsQuizUpgrade, detailedExplanation,
 } from "./spellingQuiz";
 import "./spelling.css";
 
@@ -47,7 +47,7 @@ export default function SpellingQuiz({
     const stop = onSnapshot(ref, snap => {
       const item = snap.data() as DayRow | undefined;
       setTodayQuiz(item?.spellingQuiz ?? null);
-      if (item?.spellingQuiz) setLoading(false);
+      if (item?.spellingQuiz && !needsQuizUpgrade(item.spellingQuiz)) setLoading(false);
     }, err => {
       setError("오늘 시험을 불러오지 못했습니다: " + err.message);
       setLoading(false);
@@ -87,10 +87,10 @@ export default function SpellingQuiz({
         while (day < today) {
           const dayRef = doc(db, "scheduleDays", day);
           const saved = existing.get(day);
-          const live = saved ?? await runTransaction(db, async tx => {
+          const live = !needsQuizUpgrade(saved) ? saved! : await runTransaction(db, async tx => {
             const snap = await tx.get(dayRef);
             const current = (snap.data() as DayRow | undefined)?.spellingQuiz;
-            if (current) return current;
+            if (current && !needsQuizUpgrade(current)) return current;
             const generated = fallbackQuiz(day, previous);
             tx.set(dayRef, { date: day, spellingQuiz: generated }, { merge: true });
             return generated;
@@ -102,11 +102,12 @@ export default function SpellingQuiz({
         await runTransaction(db, async tx => {
           const snap = await tx.get(ref);
           const current = (snap.data() as DayRow | undefined)?.spellingQuiz;
-          if (current) return current;
+          if (current && !needsQuizUpgrade(current)) return current;
           const generated = fallbackQuiz(today, previous);
           tx.set(ref, { date: today, spellingQuiz: generated }, { merge: true });
           return generated;
         });
+        if (!cancelled) setLoading(false);
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : "시험 문제 준비에 실패했습니다.");
@@ -143,7 +144,7 @@ export default function SpellingQuiz({
 
   useEffect(() => {
     setAnswers(["", "", ""]);
-  }, [selectedDate, member]);
+  }, [selectedDate, member, activeQuiz?.questions.map(q => q.id).join(",")]);
 
   const ranking = useMemo(() => {
     const start = rankMode === "weekly" ? weeklyStart : monthlyStart;
@@ -273,7 +274,7 @@ export default function SpellingQuiz({
                             type="radio"
                             name={`spelling-${selectedDate}-${i}`}
                             checked={chosen === option}
-                            disabled={!!mySubmission}
+                            disabled={!!mySubmission || loading}
                             onChange={() => setAnswers(old => old.map((v, j) => j === i ? option : v))}
                           />
                           {option}
@@ -283,7 +284,7 @@ export default function SpellingQuiz({
                     {mySubmission && (
                       <div className={"spelling-explanation " + (correct ? "correct" : "incorrect")}>
                         <b>{correct ? "정답" : "오답"} · 내가 고른 답: {chosen || "-"} · 정답: {q.answer}</b>
-                        <p>{q.explanation}</p>
+                        <p style={{ whiteSpace: "pre-line" }}>{detailedExplanation(q)}</p>
                       </div>
                     )}
                   </section>
@@ -295,7 +296,7 @@ export default function SpellingQuiz({
               <button
                 type="button"
                 className="spelling-submit"
-                disabled={busy || activeQuiz.questions.length !== 3 ||
+                disabled={busy || loading || activeQuiz.questions.length !== 3 ||
                   activeQuiz.questions.some(q => spellingChoices(q).length !== 2) ||
                   answers.some(a => !a.trim())}
                 onClick={() => void submit()}
@@ -333,10 +334,11 @@ export default function SpellingQuiz({
             </div>
           ))}
           <p className="spelling-hint">
-            밀린 문제를 나중에 제출해도 해당 날짜의 응시 기록으로 저장됩니다. 복습 문제는 이전 오답을 3·7·14일 간격으로 다시 출제합니다.
+            밀린 문제를 나중에 제출해도 해당 날짜의 응시 기록으로 저장됩니다. 128개 문제은행에서 최근 30일의 출제 내용을 피해서 새 문제를 고릅니다. 지난 문제에서 해설을 다시 볼 수 있습니다.
           </p>
         </section>
       </div>
     </div>
   );
 }
+

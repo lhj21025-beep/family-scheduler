@@ -1,7 +1,14 @@
 name: Validate spelling feature
 on:
   push:
-    branches: [feature/daily-spelling-quiz]
+    branches: [main, feature/daily-spelling-quiz]
+    paths:
+      - 'src/**'
+      - 'functions/**'
+      - 'tests/**'
+      - 'shared/**'
+      - 'package.json'
+      - '.github/workflows/spelling-ci.yml'
   pull_request:
     paths:
       - 'src/**'
@@ -32,3 +39,4 @@ jobs:
         working-directory: functions
       - run: npm run build
         working-directory: functions
+

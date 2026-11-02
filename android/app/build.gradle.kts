@@ -12,8 +12,8 @@ android {
         applicationId = "com.familyscheduler.nativeapp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 27
-        versionName = "1.6.18"
+        versionCode = 28
+        versionName = "1.6.19"
     }
 
     signingConfigs {
@@ -64,5 +64,6 @@ dependencies {
     implementation("com.github.usingsky:KoreanLunarCalendar:0.4.0")
     testImplementation("junit:junit:4.13.2")
 }
+
 
 

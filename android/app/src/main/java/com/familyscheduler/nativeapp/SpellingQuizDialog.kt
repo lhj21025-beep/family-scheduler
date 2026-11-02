@@ -10,6 +10,7 @@ import androidx.appcompat.app.AlertDialog
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import java.time.DayOfWeek
+import java.time.YearMonth
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.temporal.TemporalAdjusters
@@ -25,6 +26,9 @@ class SpellingQuizDialog(
     private val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
     private val spellingStartDay = LocalDate.of(2026, 10, 22)
     private var selectedDay = today
+    private var rankingMode = "주간"
+    private var rankingMonth = YearMonth.from(today)
+    private var rankingRequest = 0
     private val dayId: String get() = selectedDay.toString()
     private val box = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(18, 16, 18, 18) }
     private val members = listOf("me" to "아빠", "wife" to "엄마", "son" to "강천")
@@ -262,18 +266,46 @@ class SpellingQuizDialog(
         box.addView(text("가족 주간·월간 순위", 17f, true))
         val toggles = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         val ranks = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        val monthControls = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        val monthPicker = Spinner(activity)
+        val months = RankingPeriod.months(YearMonth.from(spellingStartDay), YearMonth.from(today))
+        monthPicker.adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item,
+            months.map { "${it.year}년 ${it.monthValue}월" })
+        monthPicker.setSelection(months.indexOf(rankingMonth))
+        val previous = Button(activity).apply { text = "이전 달" }
+        val next = Button(activity).apply { text = "다음 달" }
+        fun updateMonthControls() {
+            monthControls.visibility = if (rankingMode == "월간") View.VISIBLE else View.GONE
+            previous.isEnabled = rankingMonth > months.last()
+            next.isEnabled = rankingMonth < months.first()
+        }
+        previous.setOnClickListener { monthPicker.setSelection(months.indexOf(rankingMonth) + 1) }
+        next.setOnClickListener { monthPicker.setSelection(months.indexOf(rankingMonth) - 1) }
+        monthPicker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val changed = rankingMonth != months[position]
+                rankingMonth = months[position]
+                updateMonthControls()
+                if (changed && rankingMode == "월간") loadRanking(ranks)
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        monthControls.addView(previous)
+        monthControls.addView(monthPicker, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        monthControls.addView(next)
         listOf("주간", "월간").forEach { mode ->
             toggles.addView(Button(activity).apply {
                 text = mode
-                setOnClickListener { loadRanking(mode, ranks) }
+                setOnClickListener { rankingMode = mode; updateMonthControls(); loadRanking(ranks) }
             })
         }
-        box.addView(toggles); box.addView(ranks)
+        box.addView(toggles); box.addView(monthControls); box.addView(ranks)
         box.addView(Button(activity).apply {
             text = "점수 순위 새로고침"
-            setOnClickListener { loadRanking("주간", ranks) }
+            setOnClickListener { loadRanking(ranks) }
         })
-        loadRanking("주간", ranks)
+        updateMonthControls()
+        loadRanking(ranks)
     }
 
     private fun addHistoryControls() {
@@ -428,17 +460,21 @@ class SpellingQuizDialog(
             .addOnFailureListener { e -> showError("제출에 실패했습니다: " + e.message) }
     }
 
-    private fun loadRanking(mode: String, ranks: LinearLayout) {
+    private fun loadRanking(ranks: LinearLayout) {
         ranks.removeAllViews()
         ranks.addView(text("순위를 불러오는 중…", 12f))
-        val start = if (mode == "주간") today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-                    else today.withDayOfMonth(1)
+        val request = ++rankingRequest
+        val (start, end) = if (rankingMode == "주간")
+            today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)) to today
+        else RankingPeriod.range(rankingMonth, today)
         db.collection("scheduleDays")
             .whereGreaterThanOrEqualTo("date", start.toString())
-            .whereLessThanOrEqualTo("date", dayId)
+            .whereLessThanOrEqualTo("date", end.toString())
             .get()
             .addOnSuccessListener { snapshots ->
+                if (request != rankingRequest) return@addOnSuccessListener
                 ranks.removeAllViews()
+                ranks.addView(text("$start ~ $end · 정답 1개당 1점", 12f))
                 val table = members.map { (id, name) ->
                     val attempts = snapshots.documents.mapNotNull { snap ->
                         val quiz = snap.get("spellingQuiz") as? Map<*, *>
@@ -447,14 +483,20 @@ class SpellingQuizDialog(
                     }
                     Triple(name, attempts.sumOf { (it["score"] as? Number)?.toInt() ?: 0 }, attempts.size)
                 }.sortedWith(compareByDescending<Triple<String, Int, Int>> { it.second }.thenByDescending { it.third })
+                if (table.all { it.third == 0 }) {
+                    ranks.addView(text("이 기간에는 응시 기록이 없습니다.", 14f))
+                    return@addOnSuccessListener
+                }
                 table.forEachIndexed { i, row ->
                     ranks.addView(text((i + 1).toString() + "위 · " + row.first +
                         "    " + row.second + "점  (" + row.third + "일 참여)", 14f))
                 }
             }.addOnFailureListener { e ->
+                if (request != rankingRequest) return@addOnFailureListener
                 ranks.removeAllViews()
                 ranks.addView(text("순위를 불러오지 못했습니다: " + e.message, 12f))
             }
     }
 }
+
 

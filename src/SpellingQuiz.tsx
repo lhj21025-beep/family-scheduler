@@ -4,6 +4,7 @@ import { db } from "./firebase";
 import {
   DailySpellingQuiz, SpellingMember, fallbackQuiz, isCorrect, kstDay, shiftedDay, spellingChoices, spellingChoicePrompt, needsQuizUpgrade, detailedExplanation,
 } from "./spellingQuiz";
+import { rankingMonths, rankingMonthRange } from "./rankingPeriod";
 import "./spelling.css";
 
 const people: { id: SpellingMember; label: string }[] = [
@@ -33,10 +34,16 @@ export default function SpellingQuiz({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [rankMode, setRankMode] = useState<"weekly" | "monthly">("weekly");
+  const [rankMonth, setRankMonth] = useState(today.slice(0, 7));
+  const [rankDays, setRankDays] = useState<DayRow[]>([]);
+  const [rankLoading, setRankLoading] = useState(true);
+  const [rankError, setRankError] = useState("");
+  const [rankLoadedKey, setRankLoadedKey] = useState("");
   const [view, setView] = useState<QuizView>("today");
   const [selectedDate, setSelectedDate] = useState(today);
 
-  const monthlyStart = today.slice(0, 7) + "-01";
+  const months = rankingMonths(SPELLING_START_DAY, today);
+  const monthRange = rankingMonthRange(rankMonth, today);
   const weeklyStart = weekStart(today);
   const historyFrom = SPELLING_START_DAY > shiftedDay(today, -365)
     ? SPELLING_START_DAY
@@ -146,20 +153,38 @@ export default function SpellingQuiz({
     setAnswers(["", "", ""]);
   }, [selectedDate, member, activeQuiz?.questions.map(q => q.id).join(",")]);
 
+  const rankStart = rankMode === "weekly" ? weeklyStart : monthRange.start;
+  const rankEnd = rankMode === "weekly" ? today : monthRange.end;
+  const rankKey = rankStart + "/" + rankEnd;
+  useEffect(() => {
+    setRankLoading(true);
+    setRankError("");
+    setRankDays([]);
+    // Fetch the selected period directly: rankings are not limited to the
+    // one-year quiz-history/backfill window and never create old quizzes.
+    return onSnapshot(query(collection(db, "scheduleDays"),
+      where("date", ">=", rankStart), where("date", "<=", rankEnd)), snapshot => {
+      setRankDays(snapshot.docs.map(s => s.data() as DayRow));
+      setRankLoadedKey(rankKey);
+      setRankLoading(false);
+    }, err => {
+      setRankLoadedKey(rankKey);
+      setRankLoading(false);
+      setRankError("순위를 불러오지 못했습니다: " + err.message);
+    });
+  }, [rankStart, rankEnd, rankKey]);
+
   const ranking = useMemo(() => {
-    const start = rankMode === "weekly" ? weeklyStart : monthlyStart;
     return people.map(p => {
-      const submissions = allQuizDays
-        .filter(d => d.date >= start && d.date <= today)
+      const submissions = rankDays
         .map(d => d.spellingQuiz?.submissions?.[p.id])
         .filter((s): s is NonNullable<typeof s> => !!s);
       return { ...p, score: submissions.reduce((n, s) => n + s.score, 0), played: submissions.length };
     }).sort((a, b) =>
-      b.score - a.score ||
-      b.played - a.played ||
+      b.score - a.score || b.played - a.played ||
       people.findIndex(p => p.id === a.id) - people.findIndex(p => p.id === b.id)
     );
-  }, [allQuizDays, rankMode, monthlyStart, weeklyStart, today]);
+  }, [rankDays]);
 
   function selectView(next: QuizView) {
     setView(next);
@@ -325,8 +350,22 @@ export default function SpellingQuiz({
               <button className={rankMode === "monthly" ? "active" : ""} onClick={() => setRankMode("monthly")}>월간</button>
             </div>
           </div>
-          <small>{rankMode === "weekly" ? weeklyStart + " ~ " + today : monthlyStart + " ~ " + today} · 정답 1개당 1점</small>
-          {ranking.map((p, i) => (
+          {rankMode === "monthly" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+              <button type="button" disabled={rankMonth === months[months.length - 1]}
+                onClick={() => setRankMonth(months[months.indexOf(rankMonth) + 1])}>이전 달</button>
+              <label>조회 월 <select aria-label="순위 조회 월" value={rankMonth}
+                onChange={e => setRankMonth(e.target.value)}>
+                {months.map(month => <option key={month} value={month}>{month.slice(0, 4)}년 {Number(month.slice(5))}월</option>)}
+              </select></label>
+              <button type="button" disabled={rankMonth === months[0]}
+                onClick={() => setRankMonth(months[months.indexOf(rankMonth) - 1])}>다음 달</button>
+            </div>
+          )}
+          <small>{rankStart + " ~ " + rankEnd} · 정답 1개당 1점</small>
+          {(rankLoading || rankLoadedKey !== rankKey) ? <p role="status">순위를 불러오는 중…</p> : rankError ?
+            <p role="alert">{rankError}</p> : ranking.every(p => p.played === 0) ?
+            <p>이 기간에는 응시 기록이 없습니다.</p> : ranking.map((p, i) => (
             <div className="spelling-rank-row" key={p.id}>
               <span>{i + 1}위 · {p.label}</span>
               <b>{p.score}점</b>
@@ -341,4 +380,5 @@ export default function SpellingQuiz({
     </div>
   );
 }
+
 

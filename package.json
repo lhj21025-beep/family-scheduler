@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run test:registration && npm run test:spelling && tsc -b && vite build",
+    "build": "npm run test:registration && npm run test:spelling && npm run test:ranking && tsc -b && vite build",
     "preview": "vite preview",
     "test:registration": "node --experimental-strip-types --test tests/registration.test.mjs",
-    "test:spelling": "node --experimental-strip-types --test tests/spelling.test.mjs"
+    "test:spelling": "node --experimental-strip-types --test tests/spelling.test.mjs",
+    "test:ranking": "node --experimental-strip-types --test tests/ranking.test.mjs"
   },
   "dependencies": {
     "@fullcalendar/core": "^6.1.19",

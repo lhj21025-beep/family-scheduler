@@ -3,6 +3,7 @@ package com.familyscheduler.nativeapp
 import android.app.Activity
 import android.graphics.Typeface
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
@@ -26,8 +27,11 @@ class SpellingQuizDialog(
     private val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
     private val spellingStartDay = LocalDate.of(2026, 10, 22)
     private var selectedDay = today
+    private var subject = "spelling"
     private var rankingMode = "주간"
+    private var rankingSubject = "전체"
     private var rankingMonth = YearMonth.from(today)
+    private var rankingWeek = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
     private var rankingRequest = 0
     private val dayId: String get() = selectedDay.toString()
     private val box = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(18, 16, 18, 18) }
@@ -35,6 +39,13 @@ class SpellingQuizDialog(
     private lateinit var dialog: AlertDialog
 
     private data class HistoryRow(val date: String, val score: Int?, val quiz: Map<*, *>)
+    private data class RankRow(
+        val name: String,
+        val score: Int,
+        val played: Int,
+        val spellingScore: Int,
+        val englishScore: Int,
+    )
 
     private data class Item(val id: String, val grade: Int, val kind: String, val prompt: String,
                             val options: List<String>, val answer: String, val explanation: String) {
@@ -54,10 +65,15 @@ class SpellingQuizDialog(
     }
 
     private val bank = expandedSpellingBank.map(Item::fromMap)
+    private val englishBank = EnglishContent.bank(activity).map(Item::fromMap)
+    private val quizField: String get() = if (subject == "spelling") "spellingQuiz" else "englishQuiz"
+    private val subjectLabel: String get() = if (subject == "spelling") "맞춤법" else "영어"
+    private val subjectStartDay: LocalDate get() = if (subject == "spelling") spellingStartDay else EnglishContent.START_DAY
 
     // AI exams are already multiple choice. Earlier writing questions are
     // shown as two-choice questions without changing their saved answer/score.
     private fun optionsFor(question: Item): List<String> {
+        if (subject == "english") return question.options
         if (question.options.size == 2 && question.answer in question.options) return question.options
         val known = bank.firstOrNull {
             it.kind == "choice" && it.answer == question.answer && it.options.size == 2
@@ -123,6 +139,7 @@ class SpellingQuizDialog(
     )
 
     private fun choicePrompt(question: Item): String {
+        if (subject == "english") return question.prompt
         val original = question.prompt
         val generic = original.contains("다음 중") || original.contains("틀린 낱말을") ||
             original.contains("올바른 맞춤법을 고르세요")
@@ -142,10 +159,15 @@ class SpellingQuizDialog(
             if (bold) typeface = Typeface.DEFAULT_BOLD
         }
     private fun correct(actual: String, expected: String) = SpellingContent.correct(actual, expected)
+    private fun needsUpgrade(quiz: Map<*, *>?) = if (subject == "spelling") SpellingContent.needsUpgrade(quiz) else EnglishContent.needsUpgrade(quiz)
+    private fun explanation(item: Item) = if (subject == "spelling") SpellingContent.explanation(item.answer, item.explanation) else item.explanation
+    private fun card(color: Int, stroke: Int = 0xFFE2E8F0.toInt()) = GradientDrawable().apply {
+        setColor(color); cornerRadius = 18f; setStroke(2, stroke)
+    }
 
     fun show() {
-        box.addView(text("오늘의 맞춤법 문제를 불러오는 중…"))
-        dialog = AlertDialog.Builder(activity).setTitle("맞춤법 시험 · 하루 3문제")
+        box.addView(text("오늘의 학습 문제를 불러오는 중…"))
+        dialog = AlertDialog.Builder(activity).setTitle("📚 매일 학습 · 맞춤법 3 + 영어 3")
             .setView(ScrollView(activity).apply { addView(box) })
             .setNegativeButton("닫기", null).create()
         dialog.setOnDismissListener { onClosed() }
@@ -161,8 +183,8 @@ class SpellingQuizDialog(
         box.addView(text("문제를 준비하고 있습니다…"))
         target.get().addOnSuccessListener { snap ->
             if (selectedDay != day) return@addOnSuccessListener
-            val quiz = snap.get("spellingQuiz") as? Map<*, *>
-            if (SpellingContent.needsUpgrade(quiz)) {
+            val quiz = snap.get(quizField) as? Map<*, *>
+            if (needsUpgrade(quiz)) {
                 ensurePastQuizzes(
                     done = { if (selectedDay == day) createFallback(day) },
                     fail = { e -> if (selectedDay == day) showError("지난 문제 준비에 실패했습니다: " + e.message) },
@@ -177,16 +199,16 @@ class SpellingQuizDialog(
         db.collection("scheduleDays").whereGreaterThanOrEqualTo("date", day.minusDays(30).toString())
             .whereLessThan("date", day.toString()).get().addOnSuccessListener { snapshots ->
                 val history = snapshots.documents.mapNotNull { snap ->
-                    (snap.get("spellingQuiz") as? Map<*, *>)?.let { snap.id to it }
+                    (snap.get(quizField) as? Map<*, *>)?.let { snap.id to it }
                 }.toMap()
                 val payload = try { fallbackPayload(day, history) } catch (e: Exception) {
                     if (selectedDay == day) showError(e.message ?: "문제 생성 실패")
                     return@addOnSuccessListener
                 }
                 db.runTransaction { tx ->
-                    val existing = tx.get(target).get("spellingQuiz") as? Map<*, *>
-                    if (SpellingContent.needsUpgrade(existing)) {
-                        tx.set(target, mapOf("date" to day.toString(), "spellingQuiz" to payload), SetOptions.merge())
+                    val existing = tx.get(target).get(quizField) as? Map<*, *>
+                    if (needsUpgrade(existing)) {
+                        tx.set(target, mapOf("date" to day.toString(), quizField to payload), SetOptions.merge())
                         payload
                     } else existing
                 }.addOnSuccessListener { quiz -> if (selectedDay == day && quiz != null) render(quiz) }
@@ -210,14 +232,15 @@ class SpellingQuizDialog(
         val mine = submissions[member] as? Map<*, *>
         val oldAnswers = (mine?.get("answers") as? List<*>)?.map { it as? String ?: "" }
         val picks = MutableList(3) { "" }
-        val sourceDescription = if (quiz["source"] == "ai") {
-            "Gemini AI 자동 출제"
-        } else {
-            "검토된 맞춤법 문제은행 · 128문항"
-        }
+        val sourceDescription = if (subject == "english") "초4 영어 문제은행 · 96문항"
+            else if (quiz["source"] == "ai") "Gemini AI 자동 출제" else "검토된 맞춤법 문제은행 · 128문항"
+        addSubjectControls()
         addHistoryControls()
-        box.addView(text(dayId + " · 초등 " + (quiz["grade"] ?: grade()).toString() +
-            "학년\n" + sourceDescription + " · 가족 공통 3문제", 14f))
+        box.addView(LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(18, 12, 18, 12); background = card(Color.WHITE)
+            addView(text("$dayId · $subjectLabel 대시보드", 17f, true))
+            addView(text("초등 " + (quiz["grade"] ?: grade()).toString() + "학년 · $sourceDescription", 12f))
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 12, 0, 12) })
         if (mine != null) {
             box.addView(text((if (selectedDay == today) "오늘 완료 · " else dayId + " 완료 · ") +
                 (mine["score"] ?: 0).toString() + "/3점", 17f, true))
@@ -225,10 +248,15 @@ class SpellingQuizDialog(
             box.addView(text("미응시 · 지금 풀 수 있습니다.", 15f, true))
         }
         questions.forEachIndexed { index, item ->
-            box.addView(text((index + 1).toString() + "번 · 빈칸에 들어갈 알맞은 단어를 고르세요.\n" + choicePrompt(item), 16f, true))
             val previous = oldAnswers?.getOrNull(index).orEmpty()
+            val questionCard = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL; setPadding(16, 12, 16, 14)
+                background = if (mine == null) card(Color.WHITE) else if (correct(previous, item.answer))
+                    card(0xFFF0FDF4.toInt(), 0xFF22C55E.toInt()) else card(0xFFFFF1F2.toInt(), 0xFFEF4444.toInt())
+            }
+            questionCard.addView(text((index + 1).toString() + "번 · " + (if (subject == "spelling") "맞춤법" else "영어") + " 객관식\n" + choicePrompt(item), 16f, true))
             val choices = optionsFor(item)
-            if (choices.size != 2) {
+            if (choices.size < 2) {
                 showError("이전 문제의 보기 정보를 복구하지 못했습니다.")
                 return
             }
@@ -239,18 +267,28 @@ class SpellingQuizDialog(
                     setPadding(16, 7, 8, 7)
                     isChecked = previous == option
                     isEnabled = mine == null
+                    if (mine != null) {
+                        background = when {
+                            option == item.answer -> card(0xFFDCFCE7.toInt(), 0xFF22C55E.toInt())
+                            previous == option -> card(0xFFFEE2E2.toInt(), 0xFFEF4444.toInt())
+                            else -> card(Color.WHITE)
+                        }
+                    }
                     setOnClickListener { picks[index] = option }
-                })
+                }, RadioGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 4, 0, 4) })
             }
-            box.addView(group)
+            questionCard.addView(group)
             if (mine != null) {
                 val success = correct(previous, item.answer)
-                box.addView(text((if (success) "정답" else "오답") + " · " + item.answer + "\n" + SpellingContent.explanation(item.answer, item.explanation), 13f))
+                questionCard.addView(text((if (success) "✅ 정답" else "❌ 오답") + " · 내가 고른 답: " + previous + " · 정답: " + item.answer + "\n" + explanation(item), 13f, true).apply {
+                    setTextColor(if (success) 0xFF166534.toInt() else 0xFF991B1B.toInt())
+                })
             }
+            box.addView(questionCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, 0, 12) })
         }
         if (mine == null) {
             box.addView(Button(activity).apply {
-                text = if (selectedDay == today) "오늘 3문제 채점하고 제출" else dayId + " 밀린 3문제 채점하고 제출"
+                text = if (selectedDay == today) "오늘 $subjectLabel 3문제 채점하고 제출" else "$dayId 밀린 $subjectLabel 3문제 채점하고 제출"
                 setOnClickListener {
                     if (picks.any { it.isBlank() }) {
                         Toast.makeText(activity, "3문제 모두 답해 주세요.", Toast.LENGTH_SHORT).show()
@@ -263,10 +301,21 @@ class SpellingQuizDialog(
         } else {
             box.addView(text("제출한 문제는 언제든 다시 확인할 수 있습니다.\n내가 고른 답·정답·해설을 함께 볼 수 있고, 새 시험은 최근 30일의 출제 내용을 피합니다.", 12f))
         }
-        box.addView(text("가족 주간·월간 순위", 17f, true))
+        box.addView(text("🏆 가족 학습 순위", 18f, true))
         val toggles = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        val subjectToggles = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         val ranks = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        val weekControls = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         val monthControls = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        val weeks = RankingPeriod.weeks(spellingStartDay, today)
+        val weekPicker = Spinner(activity).apply {
+            adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, weeks.mapIndexed { index, start ->
+                if (index == 0) "이번 주" else "${start.monthValue}/${start.dayOfMonth} ~ ${start.plusDays(6).monthValue}/${start.plusDays(6).dayOfMonth}"
+            })
+            setSelection(weeks.indexOf(rankingWeek).coerceAtLeast(0))
+        }
+        val previousWeek = Button(activity).apply { text = "이전 주" }
+        val nextWeek = Button(activity).apply { text = "다음 주" }
         val monthPicker = Spinner(activity)
         val months = RankingPeriod.months(YearMonth.from(spellingStartDay), YearMonth.from(today))
         monthPicker.adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item,
@@ -276,9 +325,26 @@ class SpellingQuizDialog(
         val next = Button(activity).apply { text = "다음 달" }
         fun updateMonthControls() {
             monthControls.visibility = if (rankingMode == "월간") View.VISIBLE else View.GONE
+            weekControls.visibility = if (rankingMode == "주간") View.VISIBLE else View.GONE
             previous.isEnabled = rankingMonth > months.last()
             next.isEnabled = rankingMonth < months.first()
+            previousWeek.isEnabled = rankingWeek > weeks.last()
+            nextWeek.isEnabled = rankingWeek < weeks.first()
         }
+        previousWeek.setOnClickListener { weekPicker.setSelection(weeks.indexOf(rankingWeek) + 1) }
+        nextWeek.setOnClickListener { weekPicker.setSelection(weeks.indexOf(rankingWeek) - 1) }
+        weekPicker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val changed = rankingWeek != weeks[position]
+                rankingWeek = weeks[position]
+                updateMonthControls()
+                if (changed && rankingMode == "주간") loadRanking(ranks)
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        weekControls.addView(previousWeek)
+        weekControls.addView(weekPicker, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        weekControls.addView(nextWeek)
         previous.setOnClickListener { monthPicker.setSelection(months.indexOf(rankingMonth) + 1) }
         next.setOnClickListener { monthPicker.setSelection(months.indexOf(rankingMonth) - 1) }
         monthPicker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -299,13 +365,40 @@ class SpellingQuizDialog(
                 setOnClickListener { rankingMode = mode; updateMonthControls(); loadRanking(ranks) }
             })
         }
-        box.addView(toggles); box.addView(monthControls); box.addView(ranks)
+        listOf("전체", "맞춤법", "영어").forEach { value ->
+            subjectToggles.addView(Button(activity).apply {
+                text = value
+                setOnClickListener { rankingSubject = value; loadRanking(ranks) }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        box.addView(toggles); box.addView(subjectToggles); box.addView(weekControls); box.addView(monthControls); box.addView(ranks)
         box.addView(Button(activity).apply {
             text = "점수 순위 새로고침"
             setOnClickListener { loadRanking(ranks) }
         })
         updateMonthControls()
         loadRanking(ranks)
+    }
+
+    private fun addSubjectControls() {
+        val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, 10) }
+        listOf("spelling" to "✍️ 맞춤법 3문제", "english" to "🔤 영어 3문제").forEach { (value, label) ->
+            row.addView(Button(activity).apply {
+                text = label
+                isAllCaps = false
+                background = card(if (subject == value) 0xFF2563EB.toInt() else Color.WHITE,
+                    if (subject == value) 0xFF2563EB.toInt() else 0xFFD6DEEB.toInt())
+                setTextColor(if (subject == value) Color.WHITE else 0xFF475467.toInt())
+                setOnClickListener {
+                    if (subject != value) {
+                        subject = value
+                        selectedDay = if (value == "english" && selectedDay.isBefore(EnglishContent.START_DAY)) today else selectedDay
+                        load(selectedDay)
+                    }
+                }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(4, 0, 4, 0) })
+        }
+        box.addView(row)
     }
 
     private fun addHistoryControls() {
@@ -336,14 +429,14 @@ class SpellingQuizDialog(
     }
 
     private fun loadQuizHistoryList(missedOnly: Boolean) {
-        val from = maxOf(spellingStartDay, today.minusYears(1)).toString()
+        val from = maxOf(subjectStartDay, today.minusYears(1)).toString()
         db.collection("scheduleDays")
             .whereGreaterThanOrEqualTo("date", from)
             .whereLessThanOrEqualTo("date", today.toString())
             .get()
             .addOnSuccessListener { snapshots ->
                 val rows = snapshots.documents.mapNotNull { snap ->
-                    val quiz = snap.get("spellingQuiz") as? Map<*, *> ?: return@mapNotNull null
+                    val quiz = snap.get(quizField) as? Map<*, *> ?: return@mapNotNull null
                     val submissions = quiz["submissions"] as? Map<*, *> ?: emptyMap<String, Any>()
                     val mine = submissions[member] as? Map<*, *>
                     if (missedOnly && (snap.id >= today.toString() || mine != null)) return@mapNotNull null
@@ -357,7 +450,7 @@ class SpellingQuizDialog(
                 if (rows.isEmpty()) {
                     Toast.makeText(
                         activity,
-                        if (missedOnly) "밀린 맞춤법 문제가 없습니다." else "지난 맞춤법 문제가 없습니다.",
+                        if (missedOnly) "밀린 $subjectLabel 문제가 없습니다." else "지난 $subjectLabel 문제가 없습니다.",
                         Toast.LENGTH_SHORT,
                     ).show()
                     return@addOnSuccessListener
@@ -380,7 +473,7 @@ class SpellingQuizDialog(
     }
 
     private fun ensurePastQuizzes(done: () -> Unit, fail: (Exception) -> Unit) {
-        val start = maxOf(spellingStartDay, today.minusYears(1))
+        val start = maxOf(subjectStartDay, today.minusYears(1))
         val end = today.minusDays(1)
         if (end.isBefore(start)) {
             done()
@@ -393,7 +486,7 @@ class SpellingQuizDialog(
             .get()
             .addOnSuccessListener { snapshots ->
                 val history = snapshots.documents.mapNotNull { snap ->
-                    (snap.get("spellingQuiz") as? Map<*, *>)?.let { snap.id to it }
+                    (snap.get(quizField) as? Map<*, *>)?.let { snap.id to it }
                 }.toMap().toMutableMap()
                 val dates = generateSequence(start) { it.plusDays(1) }
                     .takeWhile { !it.isAfter(end) }
@@ -405,7 +498,7 @@ class SpellingQuizDialog(
                         return
                     }
                     val day = dates[index]
-                    if (!SpellingContent.needsUpgrade(history[day.toString()])) {
+                    if (!needsUpgrade(history[day.toString()])) {
                         createAt(index + 1)
                         return
                     }
@@ -413,11 +506,11 @@ class SpellingQuizDialog(
                     val payload = fallbackPayload(day, history)
                     db.runTransaction { tx ->
                         val snap = tx.get(target)
-                        val live = snap.get("spellingQuiz") as? Map<*, *>
-                        if (SpellingContent.needsUpgrade(live)) {
+                        val live = snap.get(quizField) as? Map<*, *>
+                        if (needsUpgrade(live)) {
                             tx.set(
                                 target,
-                                mapOf("date" to day.toString(), "spellingQuiz" to payload),
+                                mapOf("date" to day.toString(), quizField to payload),
                                 SetOptions.merge(),
                             )
                             payload
@@ -434,8 +527,11 @@ class SpellingQuizDialog(
     }
 
     private fun fallbackPayload(day: LocalDate, history: Map<String, Map<*, *>>): Map<String, Any> = mapOf(
-        "date" to day.toString(), "grade" to grade(day), "bankVersion" to SpellingContent.VERSION,
-        "source" to "curated", "questions" to SpellingContent.select(day, history),
+        "date" to day.toString(), "grade" to grade(day),
+        "bankVersion" to if (subject == "spelling") SpellingContent.VERSION else EnglishContent.VERSION,
+        "source" to "curated",
+        "questions" to if (subject == "spelling") SpellingContent.select(day, history)
+            else EnglishContent.select(day, history, englishBank.map(Item::toMap)),
         "submissions" to emptyMap<String, Any>(),
     )
 
@@ -444,7 +540,7 @@ class SpellingQuizDialog(
         val target = db.collection("scheduleDays").document(targetDay.toString())
         db.runTransaction { tx ->
             val snap = tx.get(target)
-            val live = snap.get("spellingQuiz") as? Map<*, *> ?: error("오늘 시험이 없습니다.")
+            val live = snap.get(quizField) as? Map<*, *> ?: error("오늘 시험이 없습니다.")
             val currentQuestions = (live["questions"] as? List<*>)?.mapNotNull {
                 (it as? Map<*, *>)?.let(Item::fromMap)
             }.orEmpty()
@@ -452,7 +548,7 @@ class SpellingQuizDialog(
             val submissions = live["submissions"] as? Map<*, *> ?: emptyMap<String, Any>()
             if (submissions[member] != null) error("이미 제출한 시험입니다.")
             val score = questions.indices.count { correct(picks[it], questions[it].answer) }
-            tx.update(target, "spellingQuiz.submissions." + member, mapOf(
+            tx.update(target, quizField + ".submissions." + member, mapOf(
                 "answers" to picks, "score" to score, "submittedAt" to java.time.Instant.now().toString(),
             ))
             score
@@ -465,7 +561,7 @@ class SpellingQuizDialog(
         ranks.addView(text("순위를 불러오는 중…", 12f))
         val request = ++rankingRequest
         val (start, end) = if (rankingMode == "주간")
-            today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)) to today
+            RankingPeriod.weekRange(rankingWeek, today)
         else RankingPeriod.range(rankingMonth, today)
         db.collection("scheduleDays")
             .whereGreaterThanOrEqualTo("date", start.toString())
@@ -474,22 +570,51 @@ class SpellingQuizDialog(
             .addOnSuccessListener { snapshots ->
                 if (request != rankingRequest) return@addOnSuccessListener
                 ranks.removeAllViews()
-                ranks.addView(text("$start ~ $end · 정답 1개당 1점", 12f))
+                ranks.addView(text("$start ~ $end · $rankingSubject · 정답 1개당 1점", 12f, true))
                 val table = members.map { (id, name) ->
-                    val attempts = snapshots.documents.mapNotNull { snap ->
-                        val quiz = snap.get("spellingQuiz") as? Map<*, *>
-                        val submissions = quiz?.get("submissions") as? Map<*, *>
-                        submissions?.get(id) as? Map<*, *>
+                    fun results(field: String): List<Map<*, *>> = snapshots.documents.mapNotNull { snap ->
+                        val quiz = snap.get(field) as? Map<*, *>
+                        (quiz?.get("submissions") as? Map<*, *>)?.get(id) as? Map<*, *>
                     }
-                    Triple(name, attempts.sumOf { (it["score"] as? Number)?.toInt() ?: 0 }, attempts.size)
-                }.sortedWith(compareByDescending<Triple<String, Int, Int>> { it.second }.thenByDescending { it.third })
-                if (table.all { it.third == 0 }) {
+                    val spelling = results("spellingQuiz")
+                    val english = results("englishQuiz")
+                    val spellingScore = spelling.sumOf { (it["score"] as? Number)?.toInt() ?: 0 }
+                    val englishScore = english.sumOf { (it["score"] as? Number)?.toInt() ?: 0 }
+                    val score = when (rankingSubject) {
+                        "맞춤법" -> spellingScore
+                        "영어" -> englishScore
+                        else -> spellingScore + englishScore
+                    }
+                    val played = when (rankingSubject) {
+                        "맞춤법" -> spelling.size
+                        "영어" -> english.size
+                        else -> spelling.size + english.size
+                    }
+                    RankRow(name, score, played, spellingScore, englishScore)
+                }.sortedWith(compareByDescending<RankRow> { it.score }.thenByDescending { it.played })
+                if (table.all { it.played == 0 }) {
                     ranks.addView(text("이 기간에는 응시 기록이 없습니다.", 14f))
                     return@addOnSuccessListener
                 }
                 table.forEachIndexed { i, row ->
-                    ranks.addView(text((i + 1).toString() + "위 · " + row.first +
-                        "    " + row.second + "점  (" + row.third + "일 참여)", 14f))
+                    val medal = listOf("🥇", "🥈", "🥉").getOrElse(i) { "🏅" }
+                    val detail = if (rankingSubject == "전체")
+                        "맞춤법 ${row.spellingScore} · 영어 ${row.englishScore} · ${row.played}회 참여"
+                    else "${row.played}회 참여"
+                    ranks.addView(LinearLayout(activity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = android.view.Gravity.CENTER_VERTICAL
+                        setPadding(14, 8, 14, 8)
+                        background = card(if (i == 0) 0xFFFFFBEB.toInt() else Color.WHITE,
+                            if (i == 0) 0xFFF59E0B.toInt() else 0xFFE2E8F0.toInt())
+                        addView(text("$medal ${i + 1}위 · ${row.name}\n$detail", 14f, true),
+                            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                        addView(text("${row.score}점", 20f, true).apply {
+                            setTextColor(if (i == 0) 0xFFD97706.toInt() else 0xFF2563EB.toInt())
+                        })
+                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        setMargins(0, 5, 0, 5)
+                    })
                 }
             }.addOnFailureListener { e ->
                 if (request != rankingRequest) return@addOnFailureListener

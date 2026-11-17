@@ -22,4 +22,13 @@ class RankingPeriodTest {
         assertEquals(LocalDate.of(2027, 2, 28), RankingPeriod.range(YearMonth.of(2027, 2), LocalDate.of(2027, 3, 1)).second)
         assertEquals(LocalDate.of(2026, 12, 31), RankingPeriod.range(YearMonth.of(2026, 12), LocalDate.of(2027, 1, 1)).second)
     }
+
+    @Test fun `past weeks remain selectable from Monday through Sunday`() {
+        val today = LocalDate.of(2026, 11, 17)
+        assertEquals(
+            listOf("2026-11-16", "2026-11-09", "2026-11-02", "2026-10-26", "2026-10-19"),
+            RankingPeriod.weeks(LocalDate.of(2026, 10, 22), today).map(LocalDate::toString),
+        )
+        assertEquals(LocalDate.of(2026, 11, 9) to LocalDate.of(2026, 11, 15), RankingPeriod.weekRange(LocalDate.of(2026, 11, 9), today))
+    }
 }

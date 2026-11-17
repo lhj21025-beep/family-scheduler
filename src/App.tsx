@@ -12,26 +12,20 @@ import {
   doc,
   FieldPath,
   getDoc,
-  getDocFromServer,
   getDocs,
   onSnapshot,
   query,
-  runTransaction,
   setDoc,
   updateDoc,
   where,
   writeBatch,
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import SpellingQuiz from "./SpellingQuiz";
-import { uniqueRegistrations, registrationSummary } from "./registration";
-import { syncGoogleFamilyCalendar } from "./googleCalendarSync";
-import { listenForegroundPush, registerPushForMember } from "./fcm";
 
 type MemberId = "me" | "wife" | "son";
 type Repeat = "none" | "daily" | "weekdays" | "weekly" | "monthly" | "lunarYearly";
 type RepeatEndMode = "count" | "date";
-type Alarm = 0 | 5 | 10 | 30 | 60;
+type Alarm = 5 | 10 | 30 | 60;
 type EventItem = {
   id: string;
   title: string;
@@ -39,21 +33,17 @@ type EventItem = {
   end?: string;
   allDay?: boolean;
   memberIds: MemberId[];
-  kind?: "event" | "homework" | "homework-complete" | "approval-alert";
+  kind?: "event" | "homework" | "homework-complete";
   homeworkId?: string;
   homeworkSeriesId?: string;
   homeworkStartDate?: string;
   homeworkEndDate?: string;
   completed?: boolean;
   completedAt?: string;
-  completedBy?: MemberId;
-  approvedAt?: string;
-  approvedBy?: MemberId;
   location?: string;
   memo?: string;
   repeat?: Repeat;
   repeatCount?: number;
-  alternateRepeat?: boolean;
   repeatEndMode?: RepeatEndMode;
   repeatUntil?: string;
   calendarType?: "solar" | "lunar";
@@ -63,9 +53,6 @@ type EventItem = {
   alarmMinutes?: Alarm[];
   familyId?: string;
   createdBy?: string;
-  googleImported?: boolean;
-  googleCalendarId?: string;
-  googleEventId?: string;
 };
 type Homework = { id: string; name: string; familyId?: string };
 type Notice = {
@@ -77,27 +64,7 @@ type Notice = {
   familyId?: string;
 };
 type DayDoc = { date: string; events?: Record<string, EventItem> };
-type HomeworkApproval = {
-  id: string;
-  eventId: string;
-  homeworkId?: string;
-  homeworkSeriesId?: string;
-  homeworkStartDate?: string;
-  homeworkEndDate?: string;
-  title: string;
-  targetDate: string;
-  requestedAt: string;
-  requestedBy: MemberId;
-  status: "pending" | "approved" | "rejected";
-  decidedAt?: string;
-  decidedBy?: MemberId;
-  notificationSentAt?: string;
-};
-type FamilyDoc = {
-  homeworks: Homework[];
-  notices: Notice[];
-  approvalRequests?: Record<string, HomeworkApproval>;
-};
+type FamilyDoc = { homeworks: Homework[]; notices: Notice[] };
 const FAMILY_ID = "family-main";
 const members = [
   { id: "me" as MemberId, label: "아빠", icon: "👨", color: "#4285f4" },
@@ -148,67 +115,47 @@ const cleanHomeworkTitle = (title: string) =>
     .replace(/^(?:(?:📝|✅|☑️|☑|✔️|✔)\s*)+/u, "")
     .replace(/^숙제 완료\s*·\s*/, "")
     .trim();
-const nextRepeatDate = (d: Date, repeat: Repeat, anchorDay = d.getDate(), alternate = false, anchor = d) => {
+const nextRepeatDate = (d: Date, repeat: Repeat, anchorDay = d.getDate()) => {
   const next = new Date(d);
   if (repeat === "daily") next.setDate(next.getDate() + 1);
   else if (repeat === "weekdays") {
     do {
       next.setDate(next.getDate() + 1);
     } while (next.getDay() === 0 || next.getDay() === 6);
-  } else if (repeat === "weekly") next.setDate(next.getDate() + (alternate ? 14 : 7));
+  } else if (repeat === "weekly") next.setDate(next.getDate() + 7);
   else if (repeat === "monthly") {
     next.setDate(1);
-    next.setMonth(next.getMonth() + (alternate ? 2 : 1));
+    next.setMonth(next.getMonth() + 1);
     const last = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
     next.setDate(Math.min(anchorDay, last));
   }
-  if (alternate && (repeat === "daily" || repeat === "weekdays")) {
-    const calendarDay = (value: Date) => Date.UTC(value.getFullYear(), value.getMonth(), value.getDate()) / 86400000;
-    const firstSunday = calendarDay(anchor) - anchor.getDay();
-    while (Math.floor((calendarDay(next) - firstSunday) / 7) % 2 !== 0 ||
-      (repeat === "weekdays" && (next.getDay() === 0 || next.getDay() === 6))) {
-      next.setDate(next.getDate() + 1);
-    }
-  }
   return next;
 };
-const repeatDates = (start: string, repeat: Repeat, count = 1, until?: string, alternate = false) => {
+const repeatDates = (start: string, repeat: Repeat, count = 1, until?: string) => {
   if (repeat === "none") return [start];
   const total = clampRepeatCount(count);
-  const anchor = new Date(start);
-  let d = new Date(anchor);
-  const anchorDay = anchor.getDate();
-  if (alternate && repeat === "weekdays" && (d.getDay() === 0 || d.getDay() === 6))
-    d = nextRepeatDate(d, repeat, anchorDay, alternate, anchor);
-  if (until && dateKey(d) > until) return [];
-  const out: string[] = [d.getTime() === anchor.getTime() ? start : dateTime(d)];
+  const out: string[] = [start];
+  let d = new Date(start);
+  const anchorDay = d.getDate();
   while (out.length < (until ? 365 : total)) {
-    d = nextRepeatDate(d, repeat, anchorDay, alternate, anchor);
+    d = nextRepeatDate(d, repeat, anchorDay);
     if (until && dateKey(d) > until) break;
     out.push(dateTime(d));
   }
   return out;
 };
-const homeworkRepeatDates = (startDate: string, repeat: Repeat, count = 1, alternate = false) => {
+const homeworkRepeatDates = (startDate: string, repeat: Repeat, count = 1) => {
   if (repeat === "none") return [startDate];
   const total = clampRepeatCount(count);
-  const anchor = new Date(`${startDate}T12:00:00`);
-  let d = new Date(anchor);
-  const anchorDay = anchor.getDate();
-  if (alternate && repeat === "weekdays" && (d.getDay() === 0 || d.getDay() === 6))
-    d = nextRepeatDate(d, repeat, anchorDay, alternate, anchor);
-  const out: string[] = [dateKey(d)];
+  const out: string[] = [startDate];
+  let d = new Date(`${startDate}T12:00:00`);
+  const anchorDay = d.getDate();
   while (out.length < total) {
-    d = nextRepeatDate(d, repeat, anchorDay, alternate, anchor);
+    d = nextRepeatDate(d, repeat, anchorDay);
     out.push(dateKey(d));
   }
   return out;
 };
-const alternateRepeatHint = (repeat: Repeat) =>
-  repeat === "monthly" ? "한 달 건너 같은 날짜에 반복"
-    : repeat === "weekly" ? "한 주 건너 같은 요일에 반복"
-    : repeat === "weekdays" ? "한 주 건너 월~금에 반복"
-    : "한 주 건너 일~토에 반복";
 type LunarInfo = { year: number; month: number; day: number; intercalation: boolean };
 const solarToLunar = (solar: string): LunarInfo | null => {
   const [year, month, day] = solar.slice(0, 10).split("-").map(Number);
@@ -281,11 +228,7 @@ export default function App() {
     [homeworkName, setHomeworkName] = useState(""),
     [editing, setEditing] = useState<Homework | null>(null),
     [modal, setModal] = useState<EventItem | null>(null);
-  const [googleSyncBusy, setGoogleSyncBusy] = useState(false);
-  const [googleSyncStatus, setGoogleSyncStatus] = useState("");
-  const [spellingOpen, setSpellingOpen] = useState(false);
   const [homeworkRepeat, setHomeworkRepeat] = useState<Repeat>("daily");
-  const [homeworkAlternateRepeat, setHomeworkAlternateRepeat] = useState(false);
   const [homeworkRepeatCount, setHomeworkRepeatCount] = useState(2);
   const [schoolHomeworkDetail, setSchoolHomeworkDetail] = useState("");
   const schoolOtherSelected = homeworks.some(
@@ -299,16 +242,12 @@ export default function App() {
     [settingsOpen, setSettingsOpen] = useState(false),
     [memoTitle, setMemoTitle] = useState(""),
     [memoBody, setMemoBody] = useState(""),
-    [approvalRequests, setApprovalRequests] = useState<HomeworkApproval[]>([]),
-    [approvalOpen, setApprovalOpen] = useState(false),
     [homeworkDeleteOpen, setHomeworkDeleteOpen] = useState(false),
     [homeworkDeleteTarget, setHomeworkDeleteTarget] =
       useState<EventItem | null>(null);
   const [range, setRange] = useState<{ start: string; end: string } | null>(
     null,
   );
-  const registrationLock = useRef(false);
-  const [registrationBusy, setRegistrationBusy] = useState(false);
   const touchMoved = useRef(false);
   useEffect(
     () =>
@@ -359,6 +298,19 @@ export default function App() {
     );
   }, [range?.start, range?.end]);
   useEffect(() => {
+    if (!events.length) return;
+    const seen = new Set<string>();
+    const duplicates: EventItem[] = [];
+    events.forEach((e) => {
+      if (e.kind !== "homework") return;
+      const key = `${e.homeworkId ?? e.title}|${e.start.slice(0, 10)}|${e.homeworkStartDate ?? ""}|${e.homeworkEndDate ?? ""}`;
+      if (seen.has(key)) duplicates.push(e);
+      else seen.add(key);
+    });
+    if (duplicates.length)
+      void Promise.all(duplicates.map(removeDayEvent)).catch(console.error);
+  }, [events]);
+  useEffect(() => {
     if (!auth.currentUser) return;
     const ref = doc(db, "familyData", FAMILY_ID);
     return onSnapshot(
@@ -374,11 +326,6 @@ export default function App() {
           setNotices(
             (data.notices ?? []).sort((a, b) =>
               b.createdAt.localeCompare(a.createdAt),
-            ),
-          );
-          setApprovalRequests(
-            Object.values(data.approvalRequests ?? {}).sort((a, b) =>
-              b.requestedAt.localeCompare(a.requestedAt),
             ),
           );
         } else {
@@ -459,9 +406,6 @@ export default function App() {
     };
     void run();
   }, []);
-  // The one-time teacher-phone cleanup was retired after the 2026-10-15 migration.
-  // Keeping it active could delete newly re-created schedules with the same title.
-
   const flash = (s: string) => {
     setNotice(s);
     setTimeout(() => setNotice(""), 2200);
@@ -472,27 +416,8 @@ export default function App() {
     const el = e.currentTarget;
     setTimeout(() => el.select(), 0);
   };
-  useEffect(() => {
-    if (!currentMember || !("Notification" in window) || Notification.permission !== "granted") return;
-    void registerPushForMember(currentMember).catch((error) =>
-      console.warn("FCM token refresh skipped", error),
-    );
-  }, [currentMember]);
-
-  useEffect(() => {
-    let stop: (() => void) | undefined;
-    void listenForegroundPush((title, body) => {
-      flash(title);
-      if ("Notification" in window && Notification.permission === "granted")
-        new Notification(title, { body });
-    }).then((unsubscribe) => {
-      stop = unsubscribe;
-    });
-    return () => stop?.();
-  }, []);
-
   const visible = useMemo(
-    () => events.filter((e) => e.kind !== "approval-alert" && e.memberIds.some((m) => selected.includes(m))),
+    () => events.filter((e) => e.memberIds.some((m) => selected.includes(m))),
     [events, selected],
   );
   const calendarEvents = visible.map((e) => {
@@ -568,55 +493,9 @@ export default function App() {
       deleteField(),
     );
   };
-  const registerUniqueEvents = async (proposed: EventItem[], editingId?: string) => {
-    const dates = [...new Set(proposed.map(e => e.start.slice(0, 10)))];
-    const existing: EventItem[] = [];
-    // Verify every target date on the server before any writes. No cache fallback.
-    for (let offset = 0; offset < dates.length; offset += 50) {
-      const snapshots = await Promise.all(dates.slice(offset, offset + 50).map(date =>
-        getDocFromServer(doc(db, "scheduleDays", date))));
-      snapshots.forEach(snap => existing.push(...Object.values((snap.data() as DayDoc | undefined)?.events ?? {})));
-    }
-    const candidates = uniqueRegistrations(proposed, existing, editingId);
-    const groups = new Map<string, EventItem[]>();
-    candidates.forEach(e => {
-      const date = e.start.slice(0, 10);
-      groups.set(date, [...(groups.get(date) ?? []), e]);
-    });
-    const entries = [...groups.entries()];
-    let saved = 0;
-    try {
-      for (let offset = 0; offset < entries.length; offset += 50) {
-        const chunk = entries.slice(offset, offset + 50);
-        saved += await runTransaction(db, async tx => {
-          // All transaction reads must precede writes; retries recheck duplicates.
-          const snapshots = await Promise.all(chunk.map(([date]) => tx.get(doc(db, "scheduleDays", date))));
-          let written = 0;
-          chunk.forEach(([date, rows], index) => {
-            const live = Object.values((snapshots[index].data() as DayDoc | undefined)?.events ?? {});
-            const accepted = uniqueRegistrations(rows, live, editingId);
-            if (!accepted.length) return;
-            const values = Object.fromEntries(accepted.map(e => [eventFieldKey(e.id), stripUndefined({
-              ...e, familyId: FAMILY_ID, createdBy: e.createdBy ?? auth.currentUser?.uid ?? "",
-            })]));
-            tx.set(doc(db, "scheduleDays", date), { date, events: values }, { merge: true });
-            written += accepted.length;
-          });
-          return written;
-        });
-      }
-    } catch {
-      throw new Error(`${saved}건 저장 후 연결이 중단되었습니다. 다시 등록하면 이미 저장된 항목은 제외됩니다.`);
-    }
-    return saved;
-  };
   const saveEvent = async (e: EventItem) => {
-    if (e.googleImported) return alert("구글에서 가져온 일정은 Google Calendar에서 수정해주세요.");
     if (!e.title.trim()) return alert("일정 제목을 입력해주세요.");
     if (!e.memberIds.length) return alert("최소 한 명을 선택해주세요.");
-    if (registrationLock.current) return;
-    registrationLock.current = true;
-    setRegistrationBusy(true);
     try {
       const repeat = e.repeat ?? "none";
       const until = e.repeatEndMode === "date" ? e.repeatUntil : undefined;
@@ -627,11 +506,13 @@ export default function App() {
       const lunar = solarToLunar(e.start);
       const dates = repeat === "lunarYearly" && lunar
         ? lunarRepeatDates(e.start, count, until, lunar)
-        : repeatDates(e.start, repeat, count, until, e.alternateRepeat);
+        : repeatDates(e.start, repeat, count, until);
       const duration = e.end
         ? new Date(e.end).getTime() - new Date(e.start).getTime()
         : 3600000;
-      const proposed: EventItem[] = dates.map((d, i) => ({
+      await Promise.all(
+        dates.map((d, i) =>
+          writeDayEvent({
             ...e,
             id: i === 0 ? e.id : uid(),
             start: d,
@@ -639,7 +520,6 @@ export default function App() {
               ? dateTime(new Date(new Date(d).getTime() + duration))
               : undefined,
             repeat: i === 0 ? repeat : "none",
-            alternateRepeat: i === 0 && repeat !== "none" && repeat !== "lunarYearly" && !!e.alternateRepeat,
             repeatCount: i === 0 ? count : 1,
             repeatEndMode: i === 0 ? (e.repeatEndMode ?? "count") : "count",
             repeatUntil: i === 0 ? until : undefined,
@@ -647,23 +527,23 @@ export default function App() {
             lunarMonth: repeat === "lunarYearly" ? lunar?.month : undefined,
             lunarDay: repeat === "lunarYearly" ? lunar?.day : undefined,
             lunarLeapMonth: repeat === "lunarYearly" ? lunar?.intercalation : false,
-      }));
-      const saved = await registerUniqueEvents(proposed, events.some(old => old.id === e.id) ? e.id : undefined);
-
+          }),
+        ),
+      );
       setModal(null);
-      alert(registrationSummary(proposed.length, saved));
+      flash(
+        dates.length === 1
+          ? "일정을 저장했습니다."
+          : `${dates.length}개의 반복 일정을 만들었습니다.`,
+      );
     } catch (error) {
       console.error(error);
-      alert(error instanceof Error ? error.message : "일정 저장에 실패했습니다.");
-    } finally {
-      registrationLock.current = false;
-      setRegistrationBusy(false);
+      alert("일정 저장에 실패했습니다.");
     }
   };
   const changeEvent = async (id: string, start: string, end?: string) => {
     const old = events.find((x) => x.id === id);
     if (!old) return;
-    if (old.googleImported) return alert("구글에서 가져온 일정은 Google Calendar에서 수정해주세요.");
     try {
       if (old.start.slice(0, 10) === start.slice(0, 10))
         await writeDayEvent({ ...old, start, end });
@@ -677,7 +557,6 @@ export default function App() {
     }
   };
   const deleteEvent = async (e: EventItem) => {
-    if (e.googleImported) return alert("구글에서 가져온 일정은 Google Calendar에서 삭제해주세요.");
     if (!confirm(`'${e.title}' 일정을 삭제할까요?`)) return;
     try {
       await removeDayEvent(e);
@@ -690,11 +569,13 @@ export default function App() {
   };
   const registerHomework = async () => {
     if (!homeworkIds.length) return;
-    if (schoolOtherSelected && !schoolHomeworkDetail.trim())
+    if (
+      schoolOtherSelected &&
+      !schoolHomeworkDetail.trim()
+    )
       return alert("어떤 학교숙제인지 입력해주세요.");
     if (homeworkEndDate < homeworkStartDate)
       return alert("종료일은 시작일과 같거나 이후로 선택해주세요.");
-
     const chosen = homeworks
       .filter((h) => homeworkIds.includes(h.id))
       .map((h) =>
@@ -702,53 +583,61 @@ export default function App() {
           ? { ...h, name: `학교숙제 · ${schoolHomeworkDetail.trim()}` }
           : h,
       );
-    const count = homeworkRepeat === "none" ? 1 : clampRepeatCount(homeworkRepeatCount);
-    const occurrenceStarts = homeworkRepeatDates(homeworkStartDate, homeworkRepeat, count, homeworkAlternateRepeat);
+    const count =
+      homeworkRepeat === "none" ? 1 : clampRepeatCount(homeworkRepeatCount);
+    const occurrenceStarts = homeworkRepeatDates(
+      homeworkStartDate,
+      homeworkRepeat,
+      count,
+    );
     const blockDays = daysBetween(homeworkStartDate, homeworkEndDate);
-    const proposed = chosen.flatMap((h) => {
+    const created = chosen.flatMap((h) => {
       const seriesId = uid();
       return occurrenceStarts.flatMap((occStart) => {
         const occEnd = shiftDate(occStart, blockDays);
-        return dateRange(occStart, occEnd).map((d) => ({
-          id: uid(),
-          title: `📝 ${h.name}`,
-          start: `${d}T00:00:00`,
-          end: `${d}T23:59:59`,
-          allDay: true,
-          memberIds: ["son"] as MemberId[],
-          kind: "homework" as const,
-          homeworkId: h.id,
-          homeworkSeriesId: seriesId,
-          homeworkStartDate: occStart,
-          homeworkEndDate: occEnd,
-          completed: false,
-          repeat: homeworkRepeat,
-          alternateRepeat: homeworkRepeat !== "none" && homeworkAlternateRepeat,
-          repeatCount: count,
-        }));
+        return dateRange(occStart, occEnd)
+          .filter(
+            (d) =>
+              !events.some(
+                (e) =>
+                  e.kind === "homework" &&
+                  e.homeworkId === h.id &&
+                  e.start.slice(0, 10) === d &&
+                  !e.completed,
+              ),
+          )
+          .map((d) => ({
+            id: uid(),
+            title: `📝 ${h.name}`,
+            start: `${d}T00:00:00`,
+            end: `${d}T23:59:59`,
+            allDay: true,
+            memberIds: ["son"] as MemberId[],
+            kind: "homework" as const,
+            homeworkId: h.id,
+            homeworkSeriesId: seriesId,
+            homeworkStartDate: occStart,
+            homeworkEndDate: occEnd,
+            completed: false,
+            repeat: homeworkRepeat,
+            repeatCount: count,
+          }));
       });
     });
-
-    if (registrationLock.current) return;
-    registrationLock.current = true;
-    setRegistrationBusy(true);
+    if (!created.length) return alert("선택한 숙제는 이미 등록되어 있습니다.");
     try {
-      const saved = await registerUniqueEvents(proposed);
+      await Promise.all(created.map(writeDayEvent));
       setHomeworkOpen(false);
       setHomeworkIds([]);
       setSchoolHomeworkDetail("");
       setHomeworkStartDate(today);
       setHomeworkEndDate(today);
       setHomeworkRepeat("none");
-      setHomeworkAlternateRepeat(false);
       setHomeworkRepeatCount(1);
-      alert(registrationSummary(proposed.length, saved));
+      flash(`${created.length}개 숙제를 등록했습니다.`);
     } catch (e) {
       console.error(e);
-      alert(e instanceof Error ? e.message : "숙제 등록에 실패했습니다.");
-    } finally {
-      registrationLock.current = false;
-      setRegistrationBusy(false);
+      alert("숙제 등록에 실패했습니다.");
     }
   };
   const openHomeworkDelete = (e: EventItem) => {
@@ -785,149 +674,8 @@ export default function App() {
       alert("숙제 삭제에 실패했습니다.");
     }
   };
-  const memberLabel = (id?: MemberId) =>
-    members.find((m) => m.id === id)?.label ?? id ?? "알 수 없음";
-
-  const requestHomeworkApproval = async (e: EventItem) => {
-    if (!currentMember) return;
-    const existing = approvalRequests.find(
-      (r) => r.status === "pending" && r.eventId === e.id,
-    );
-    if (existing) {
-      alert("이미 부모 확인을 요청한 숙제입니다.");
-      return;
-    }
-    const request: HomeworkApproval = {
-      id: uid(),
-      eventId: e.id,
-      homeworkId: e.homeworkId,
-      homeworkSeriesId: e.homeworkSeriesId,
-      homeworkStartDate: e.homeworkStartDate,
-      homeworkEndDate: e.homeworkEndDate,
-      title: cleanHomeworkTitle(e.title),
-      targetDate: e.start.slice(0, 10),
-      requestedAt: new Date().toISOString(),
-      requestedBy: currentMember,
-      status: "pending",
-    };
-    await setDoc(
-      doc(db, "familyData", FAMILY_ID),
-      { approvalRequests: { [request.id]: stripUndefined(request) } },
-      { merge: true },
-    );
-
-    // 이미 배포되어 있는 일정 푸시 경로를 그대로 사용한다.
-    // 다음 1분 시점의 숨김 알림 이벤트를 부모 계정 대상으로 만들어 백그라운드 푸시를 보낸다.
-    const pushAt = new Date(Date.now() + 60000);
-    const alertEvent: EventItem = {
-      id: `approval_alert_${request.id}`,
-      title: `✅ 부모 확인 필요 · ${request.title}`,
-      start: dateTime(pushAt),
-      end: dateTime(new Date(pushAt.getTime() + 5 * 60000)),
-      memberIds: ["me", "wife"],
-      kind: "approval-alert",
-      memo: `강천이 ${request.targetDate} 숙제를 미리 완료하려고 합니다. 앱에서 승인 또는 거절해 주세요.`,
-      alarmMinutes: [0 as Alarm],
-      familyId: FAMILY_ID,
-    };
-    await writeDayEvent(alertEvent);
-    alert("오늘 기준 이틀 이후의 숙제라 부모 확인이 필요합니다. 아빠·엄마에게 승인 요청을 보냈습니다.");
-  };
-
-  const decideHomeworkApproval = async (
-    request: HomeworkApproval,
-    approve: boolean,
-  ) => {
-    if (currentMember !== "me" && currentMember !== "wife") return;
-    const now = new Date();
-    const familyRef = doc(db, "familyData", FAMILY_ID);
-    try {
-      await runTransaction(db, async (transaction) => {
-        const familySnap = await transaction.get(familyRef);
-        const familyData = familySnap.data() as Partial<FamilyDoc> | undefined;
-        const current = familyData?.approvalRequests?.[request.id];
-        if (!current || current.status !== "pending")
-          throw new Error("이미 다른 보호자가 처리한 요청입니다.");
-
-        const startDate = current.homeworkStartDate ?? current.targetDate;
-        const endDate = current.homeworkEndDate ?? current.targetDate;
-        const dates = [...new Set(dateRange(startDate, endDate))];
-        const refs = dates.map((d) => doc(db, "scheduleDays", dayId(d)));
-        const snaps = await Promise.all(refs.map((ref) => transaction.get(ref)));
-
-        if (approve) {
-          let changed = 0;
-          snaps.forEach((snap, index) => {
-            if (!snap.exists()) return;
-            const rows = Object.values((snap.data() as DayDoc).events ?? {});
-            rows.forEach((item) => {
-              const same =
-                item.kind === "homework" &&
-                item.homeworkId === current.homeworkId &&
-                (current.homeworkSeriesId
-                  ? item.homeworkSeriesId === current.homeworkSeriesId &&
-                    item.homeworkStartDate === startDate &&
-                    item.homeworkEndDate === endDate
-                  : item.id === current.eventId);
-              if (!same || item.completed) return;
-              transaction.update(
-                refs[index],
-                new FieldPath("events", eventFieldKey(item.id)),
-                stripUndefined({
-                  ...item,
-                  title: `✅ ${cleanHomeworkTitle(item.title)}`,
-                  completed: true,
-                  completedAt: current.requestedAt,
-                  completedBy: current.requestedBy,
-                  approvedAt: now.toISOString(),
-                  approvedBy: currentMember,
-                }),
-              );
-              changed++;
-            });
-          });
-          if (!changed) throw new Error("승인할 숙제 데이터를 찾지 못했습니다.");
-        }
-
-        transaction.update(
-          familyRef,
-          new FieldPath("approvalRequests", request.id),
-          stripUndefined({
-            ...current,
-            status: approve ? "approved" : "rejected",
-            decidedAt: now.toISOString(),
-            decidedBy: currentMember,
-          }),
-        );
-        const alertDate = dateKey(new Date(new Date(current.requestedAt).getTime() + 60000));
-        transaction.update(
-          doc(db, "scheduleDays", dayId(alertDate)),
-          new FieldPath("events", eventFieldKey(`approval_alert_${request.id}`)),
-          deleteField(),
-        );
-      });
-      setApprovalOpen(false);
-      flash(approve ? "숙제 완료를 승인했습니다." : "숙제 완료 요청을 거절했습니다.");
-    } catch (err) {
-      console.error(err);
-      alert(err instanceof Error ? err.message : "부모 확인 처리에 실패했습니다.");
-    }
-  };
-
   const completeHomework = async (e: EventItem) => {
     if (e.completed) return;
-    if (
-      currentMember === "son" &&
-      e.start.slice(0, 10) >= shiftDate(today, 2)
-    ) {
-      try {
-        await requestHomeworkApproval(e);
-      } catch (err) {
-        console.error(err);
-        alert("부모 확인 요청을 저장하지 못했습니다.");
-      }
-      return;
-    }
     const now = new Date();
     const clickedDate = e.start.slice(0, 10);
     const startDate = e.homeworkStartDate ?? clickedDate;
@@ -961,7 +709,6 @@ export default function App() {
               title: `✅ ${cleanHomeworkTitle(x.title)}`,
               completed: true,
               completedAt: now.toISOString(),
-              completedBy: currentMember ?? undefined,
             });
             const map = byDate.get(s.id) ?? {};
             map[eventFieldKey(x.id)] = next;
@@ -983,7 +730,6 @@ export default function App() {
             title: `✅ ${cleanHomeworkTitle(clickedItem.title)}`,
             completed: true,
             completedAt: now.toISOString(),
-              completedBy: currentMember ?? undefined,
           });
           byDate.set(clickedDate, { [eventFieldKey(clickedItem.id)]: next });
           count = 1;
@@ -1078,9 +824,6 @@ export default function App() {
               title: `📝 ${cleanHomeworkTitle(item.title)}`,
               completed: false,
               completedAt: undefined,
-              completedBy: undefined,
-              approvedAt: undefined,
-              approvedBy: undefined,
             });
             batch.update(
               ref,
@@ -1180,32 +923,15 @@ export default function App() {
     setMemoBody("");
     flash("가족 메모를 저장했습니다.");
   };
-  const runGoogleSync = async () => {
-    if (googleSyncBusy) return;
-    setGoogleSyncBusy(true);
-    setGoogleSyncStatus("Google Calendar 일정을 확인하고 있습니다.");
-    try {
-      const r = await syncGoogleFamilyCalendar();
-      setGoogleSyncStatus(`완료: 추가 ${r.added}건 · 수정 ${r.updated}건 · 삭제 ${r.removed}건 · 변경 없음 ${r.unchanged}건 (캘린더 ${r.calendars}개)`);
-    } catch (e) {
-      console.error("Google calendar sync failed", e);
-      setGoogleSyncStatus(`동기화 실패: ${e instanceof Error ? e.message : "알 수 없는 오류"}`);
-    } finally { setGoogleSyncBusy(false); }
-  };
   const requestNotifications = async () => {
     if (!("Notification" in window))
       return alert("이 브라우저는 알림을 지원하지 않습니다.");
-    if (!currentMember) return alert("로그인한 가족 구성원을 확인하지 못했습니다.");
-    try {
-      await registerPushForMember(currentMember);
-      flash("알림 권한과 백그라운드 푸시가 등록되었습니다.");
-    } catch (error) {
-      console.error(error);
-      const p = await Notification.requestPermission();
-      if (p === "granted")
-        flash("브라우저 알림은 허용됐지만 백그라운드 푸시 등록은 확인이 필요합니다.");
-      else flash("알림 권한이 허용되지 않았습니다.");
-    }
+    const p = await Notification.requestPermission();
+    flash(
+      p === "granted"
+        ? "알림 권한이 허용되었습니다."
+        : "알림 권한이 허용되지 않았습니다.",
+    );
   };
   const testNotification = () => {
     if (!("Notification" in window) || Notification.permission !== "granted")
@@ -1226,7 +952,6 @@ export default function App() {
       const needle = term.toLocaleLowerCase("ko-KR");
       const rows = snap.docs
         .flatMap((d) => Object.values((d.data() as DayDoc).events ?? {}))
-        .filter((e) => e.kind !== "approval-alert")
         .filter((e) => {
           const family = e.memberIds
             .map((id) => members.find((m) => m.id === id)?.label ?? "")
@@ -1281,11 +1006,8 @@ export default function App() {
           const key = `family-alarm-${e.id}-${min}-${e.start}`;
           if (diff >= min && diff < min + 1 && !localStorage.getItem(key)) {
             localStorage.setItem(key, "1");
-            new Notification(e.kind === "approval-alert" ? e.title : `📅 ${e.title}`, {
-              body:
-                e.kind === "approval-alert"
-                  ? (e.memo ?? "숙제 완료 승인 또는 거절이 필요합니다.")
-                  : `${min}분 후 일정이 시작됩니다.${e.location ? ` 장소: ${e.location}` : ""}`,
+            new Notification(`📅 ${e.title}`, {
+              body: `${min}분 후 일정이 시작됩니다.${e.location ? ` 장소: ${e.location}` : ""}`,
             });
           }
         });
@@ -1301,7 +1023,6 @@ export default function App() {
       (e) =>
         e.start.slice(0, 10) === today &&
         e.kind !== "homework-complete" &&
-        e.kind !== "approval-alert" &&
         e.memberIds.some((m) => selected.includes(m)),
     )
     .sort((a, b) => a.start.localeCompare(b.start));
@@ -1345,15 +1066,6 @@ export default function App() {
           <button onClick={() => setNoticeOpen((p) => !p)}>📣 가족 메모</button>
           <button onClick={() => setStatsOpen((p) => !p)}>📊 통계</button>
           <button
-            className="spelling-top-icon"
-            type="button"
-            title="매일 학습"
-            aria-label="매일 학습"
-            onClick={() => setSpellingOpen(true)}
-          >
-            🔤
-          </button>
-          <button
             onClick={() => {
               setHomeworkStartDate(today);
               setHomeworkEndDate(today);
@@ -1366,12 +1078,6 @@ export default function App() {
           >
             📝 숙제 체크
           </button>
-          {(currentMember === "me" || currentMember === "wife") &&
-            approvalRequests.some((r) => r.status === "pending") && (
-              <button onClick={() => setApprovalOpen(true)}>
-                ✅ 부모 확인 ({approvalRequests.filter((r) => r.status === "pending").length})
-              </button>
-            )}
           <button
             className="add-btn"
             onClick={() =>
@@ -1390,20 +1096,9 @@ export default function App() {
           >
             ＋ 일정 추가
           </button>
-          {currentMember === "me" && (
-            <button
-              className="add-btn"
-              disabled={googleSyncBusy}
-              onClick={() => void runGoogleSync()}
-              title="Google Calendar 공개 일정 중 제목에 가족이 포함된 일정 동기화"
-            >
-              {googleSyncBusy ? "동기화 중…" : "↻ Google 동기화"}
-            </button>
-          )}
           <button onClick={() => setSettingsOpen(true)}>⚙️</button>
         </div>
       </header>
-      {currentMember === "me" && googleSyncStatus && <div role="status" style={{padding:"6px 14px",fontSize:"13px"}}>{googleSyncStatus}</div>}
       <div className="toolbar">
         <div className="filters">
           <strong>가족</strong>
@@ -1631,32 +1326,6 @@ export default function App() {
           ))}
         </div>
       )}
-      {approvalOpen && (
-        <div className="modal-backdrop" onClick={(e) => closeBackdrop(e, () => setApprovalOpen(false))}>
-          <div className="modal homework-modal">
-            <div className="modal-header">
-              <h2>✅ 부모 확인</h2>
-              <button onClick={() => setApprovalOpen(false)}>×</button>
-            </div>
-            <div className="notice-list">
-              {approvalRequests.filter((r) => r.status === "pending").map((r) => (
-                <article key={r.id}>
-                  <b>{r.title}</b>
-                  <small>
-                    숙제일 {r.targetDate} · 요청 {new Date(r.requestedAt).toLocaleString("ko-KR")} · {memberLabel(r.requestedBy)}
-                  </small>
-                  <p>오늘 기준 이틀 이후 숙제를 미리 완료하려는 요청입니다.</p>
-                  <div className="setting-actions">
-                    <button className="save-btn" onClick={() => void decideHomeworkApproval(r, true)}>OK · 완료 승인</button>
-                    <button onClick={() => void decideHomeworkApproval(r, false)}>거절</button>
-                  </div>
-                </article>
-              ))}
-              {!approvalRequests.some((r) => r.status === "pending") && <p>대기 중인 부모 확인 요청이 없습니다.</p>}
-            </div>
-          </div>
-        </div>
-      )}
       {settingsOpen && (
         <div
           className="modal-backdrop"
@@ -1667,15 +1336,6 @@ export default function App() {
               <h2>⚙️ 알림 / 앱 설정</h2>
               <button onClick={() => setSettingsOpen(false)}>×</button>
             </div>
-            {currentMember === "me" && <section className="setting-note" aria-label="Google Calendar 동기화">
-              <h3>Google Calendar 수동 동기화</h3>
-              <p>연결 계정: lhj21025@gmail.com</p>
-              <p>모든 캘린더 중 제목에 <b>[가족]</b>이 포함되고 기본 공개 또는 전체 공개인 일정만 가져옵니다. 구글 일정은 읽기 전용입니다.</p>
-              <div className="setting-actions">
-                <button className="save-btn" disabled={googleSyncBusy} onClick={() => void runGoogleSync()}>{googleSyncBusy ? "동기화 중…" : "Google 일정 동기화"}</button>
-              </div>
-              {googleSyncStatus && <p role="status">{googleSyncStatus}</p>}
-            </section>}
             <p className="setting-note">
               일정의 알림 대상은 <b>일정 등록 화면에서 선택한 가족 구성원</b>
               으로 저장됩니다. 현재 로그인한 구성원의 기기에서 브라우저 알림을
@@ -1686,8 +1346,9 @@ export default function App() {
               <button onClick={testNotification}>테스트 알림</button>
             </div>
             <p className="setting-note">
-              알림 권한을 허용하면 FCM 백그라운드 푸시도 등록됩니다. 부모 확인 요청과 일정 알림을
-              앱이 닫혀 있을 때도 받을 수 있습니다.
+              화면이 꺼진 상태의 확실한 푸시 알림은 FCM 같은 서버 푸시 연결이
+              추가로 필요합니다. 현재 버전은 브라우저가 실행 중일 때 일정 알림을
+              감지합니다.
             </p>
             <button
               className="save-btn wide"
@@ -1734,9 +1395,6 @@ export default function App() {
         </div>
       )}
       {notice && <div className="toast">✓ {notice}</div>}
-      {spellingOpen && currentMember && (
-        <SpellingQuiz member={currentMember} close={() => setSpellingOpen(false)} />
-      )}
       {homeworkOpen && (
         <div
           className="modal-backdrop"
@@ -1776,7 +1434,6 @@ export default function App() {
                   onChange={(e) => {
                     const r = e.target.value as Repeat;
                     setHomeworkRepeat(r);
-                    if (r === "none") setHomeworkAlternateRepeat(false);
                     setHomeworkRepeatCount(
                       r === "none" ? 1 : Math.max(2, homeworkRepeatCount),
                     );
@@ -1789,14 +1446,6 @@ export default function App() {
                   <option value="monthly">매월</option>
                 </select>
               </label>
-              {homeworkRepeat !== "none" && (
-                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <input type="checkbox" style={{ width: "auto" }} checked={homeworkAlternateRepeat}
-                    onChange={(e) => setHomeworkAlternateRepeat(e.target.checked)} />
-                  격주
-                  <span className="field-hint">{alternateRepeatHint(homeworkRepeat)}</span>
-                </label>
-              )}
               <label>
                 반복 횟수
                 <select
@@ -1879,7 +1528,7 @@ export default function App() {
               </label>
             )}
             <div className="homework-modal-actions">
-              <button className="save-btn" disabled={registrationBusy} onClick={registerHomework}>
+              <button className="save-btn" onClick={registerHomework}>
                 선택한 숙제 등록
               </button>
               <button onClick={() => setManageOpen((p) => !p)}>
@@ -2003,16 +1652,6 @@ export default function App() {
                   >
                     {modal.completed ? "완료" : "미완료"}
                   </span>
-                  {modal.completed && modal.completedAt && (
-                    <div className="field-hint">
-                      완료 버튼: {new Date(modal.completedAt).toLocaleString("ko-KR")} · {memberLabel(modal.completedBy)}
-                    </div>
-                  )}
-                  {modal.completed && modal.approvedAt && (
-                    <div className="field-hint">
-                      부모 승인: {new Date(modal.approvedAt).toLocaleString("ko-KR")} · {memberLabel(modal.approvedBy)}
-                    </div>
-                  )}
                   <p>
                     {modal.homeworkStartDate && modal.homeworkEndDate
                       ? `숙제 기간 · ${modal.homeworkStartDate} ~ ${modal.homeworkEndDate}`
@@ -2082,11 +1721,6 @@ export default function App() {
                       >
                         {modal.completed ? "완료" : "미완료"}
                       </span>
-                      {modal.completed && modal.completedAt && (
-                        <div className="field-hint">
-                          완료: {new Date(modal.completedAt).toLocaleString("ko-KR")} · {memberLabel(modal.completedBy)}
-                        </div>
-                      )}
                       {!modal.completed ? (
                         <button
                           className="complete-btn wide"
@@ -2243,7 +1877,6 @@ export default function App() {
                           setModal({
                             ...modal,
                             repeat: r,
-                            alternateRepeat: r === "none" || r === "lunarYearly" ? false : modal.alternateRepeat,
                             repeatCount:
                               r === "none"
                                 ? 1
@@ -2259,14 +1892,6 @@ export default function App() {
                         <option value="lunarYearly">음력 매년</option>
                       </select>
                     </label>
-                    {modal.repeat && modal.repeat !== "none" && modal.repeat !== "lunarYearly" && (
-                      <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <input type="checkbox" style={{ width: "auto" }} checked={!!modal.alternateRepeat}
-                          onChange={(e) => setModal({ ...modal, alternateRepeat: e.target.checked })} />
-                        격주
-                        <span className="field-hint">{alternateRepeatHint(modal.repeat)}</span>
-                      </label>
-                    )}
                     {(modal.repeat ?? "none") !== "none" && (
                       <div className="form-grid">
                         <label>
@@ -2356,7 +1981,6 @@ export default function App() {
                       <button onClick={() => setModal(null)}>취소</button>
                       <button
                         className="save-btn"
-                        disabled={registrationBusy}
                         onClick={() => saveEvent(modal)}
                       >
                         저장
@@ -2372,4 +1996,3 @@ export default function App() {
     </div>
   );
 }
-

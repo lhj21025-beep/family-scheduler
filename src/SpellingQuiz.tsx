@@ -4,7 +4,8 @@ import { db } from "./firebase";
 import {
   DailySpellingQuiz, SpellingMember, fallbackQuiz, isCorrect, kstDay, shiftedDay, spellingChoices, spellingChoicePrompt, needsQuizUpgrade, detailedExplanation,
 } from "./spellingQuiz";
-import { rankingMonths, rankingMonthRange } from "./rankingPeriod";
+import { ENGLISH_START_DAY, fallbackEnglishQuiz, needsEnglishQuiz } from "./englishQuiz";
+import { rankingMonths, rankingMonthRange, rankingWeeks, rankingWeekRange } from "./rankingPeriod";
 import "./spelling.css";
 
 const people: { id: SpellingMember; label: string }[] = [
@@ -13,8 +14,10 @@ const people: { id: SpellingMember; label: string }[] = [
   { id: "son", label: "강천" },
 ];
 
-type DayRow = { date: string; spellingQuiz?: DailySpellingQuiz };
+type DayRow = { date: string; spellingQuiz?: DailySpellingQuiz; englishQuiz?: DailySpellingQuiz };
 type QuizView = "today" | "missed" | "history";
+type QuizSubject = "spelling" | "english";
+type RankSubject = "total" | QuizSubject;
 const SPELLING_START_DAY = "2026-10-22";
 
 function weekStart(day: string): string {
@@ -28,12 +31,15 @@ export default function SpellingQuiz({
 }: { member: SpellingMember; close: () => void }) {
   const today = kstDay();
   const [todayQuiz, setTodayQuiz] = useState<DailySpellingQuiz | null>(null);
+  const [todayEnglishQuiz, setTodayEnglishQuiz] = useState<DailySpellingQuiz | null>(null);
   const [days, setDays] = useState<DayRow[]>([]);
   const [answers, setAnswers] = useState<string[]>(["", "", ""]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [rankMode, setRankMode] = useState<"weekly" | "monthly">("weekly");
+  const [rankSubject, setRankSubject] = useState<RankSubject>("total");
+  const [rankWeek, setRankWeek] = useState(weekStart(today));
   const [rankMonth, setRankMonth] = useState(today.slice(0, 7));
   const [rankDays, setRankDays] = useState<DayRow[]>([]);
   const [rankLoading, setRankLoading] = useState(true);
@@ -41,10 +47,12 @@ export default function SpellingQuiz({
   const [rankLoadedKey, setRankLoadedKey] = useState("");
   const [view, setView] = useState<QuizView>("today");
   const [selectedDate, setSelectedDate] = useState(today);
+  const [subject, setSubject] = useState<QuizSubject>("spelling");
 
   const months = rankingMonths(SPELLING_START_DAY, today);
+  const weeks = rankingWeeks(SPELLING_START_DAY, today);
   const monthRange = rankingMonthRange(rankMonth, today);
-  const weeklyStart = weekStart(today);
+  const weekRange = rankingWeekRange(rankWeek, today);
   const historyFrom = SPELLING_START_DAY > shiftedDay(today, -365)
     ? SPELLING_START_DAY
     : shiftedDay(today, -365);
@@ -54,7 +62,9 @@ export default function SpellingQuiz({
     const stop = onSnapshot(ref, snap => {
       const item = snap.data() as DayRow | undefined;
       setTodayQuiz(item?.spellingQuiz ?? null);
-      if (item?.spellingQuiz && !needsQuizUpgrade(item.spellingQuiz)) setLoading(false);
+      setTodayEnglishQuiz(item?.englishQuiz ?? null);
+      if (item?.spellingQuiz && !needsQuizUpgrade(item.spellingQuiz) &&
+          item?.englishQuiz && !needsEnglishQuiz(item.englishQuiz)) setLoading(false);
     }, err => {
       setError("오늘 시험을 불러오지 못했습니다: " + err.message);
       setLoading(false);
@@ -85,7 +95,7 @@ export default function SpellingQuiz({
         const existing = new Map(
           existingSnap.docs.map(s => {
             const row = s.data() as DayRow;
-            return [s.id, row.spellingQuiz] as const;
+            return [s.id, row] as const;
           }),
         );
         const previous: DailySpellingQuiz[] = [];
@@ -93,7 +103,7 @@ export default function SpellingQuiz({
 
         while (day < today) {
           const dayRef = doc(db, "scheduleDays", day);
-          const saved = existing.get(day);
+          const saved = existing.get(day)?.spellingQuiz;
           const live = !needsQuizUpgrade(saved) ? saved! : await runTransaction(db, async tx => {
             const snap = await tx.get(dayRef);
             const current = (snap.data() as DayRow | undefined)?.spellingQuiz;
@@ -114,6 +124,24 @@ export default function SpellingQuiz({
           tx.set(ref, { date: today, spellingQuiz: generated }, { merge: true });
           return generated;
         });
+        if (today >= ENGLISH_START_DAY) {
+          const englishPrevious: DailySpellingQuiz[] = [];
+          let englishDay = ENGLISH_START_DAY;
+          while (englishDay <= today) {
+            const englishRef = doc(db, "scheduleDays", englishDay);
+            const saved = existing.get(englishDay)?.englishQuiz;
+            const live = !needsEnglishQuiz(saved) ? saved! : await runTransaction(db, async tx => {
+              const snap = await tx.get(englishRef);
+              const current = (snap.data() as DayRow | undefined)?.englishQuiz;
+              if (current && !needsEnglishQuiz(current)) return current;
+              const generated = fallbackEnglishQuiz(englishDay, englishPrevious);
+              tx.set(englishRef, { date: englishDay, englishQuiz: generated }, { merge: true });
+              return generated;
+            });
+            englishPrevious.push(live);
+            englishDay = shiftedDay(englishDay, 1);
+          }
+        }
         if (!cancelled) setLoading(false);
       } catch (e) {
         if (!cancelled) {
@@ -128,33 +156,40 @@ export default function SpellingQuiz({
 
   const todayRow = useMemo<DayRow | undefined>(() => {
     const historyToday = days.find(d => d.date === today);
-    return historyToday ?? (todayQuiz ? { date: today, spellingQuiz: todayQuiz } : undefined);
-  }, [days, today, todayQuiz]);
+    return historyToday ?? (todayQuiz || todayEnglishQuiz ? {
+      date: today,
+      spellingQuiz: todayQuiz ?? undefined,
+      englishQuiz: todayEnglishQuiz ?? undefined,
+    } : undefined);
+  }, [days, today, todayQuiz, todayEnglishQuiz]);
 
   const allQuizDays = useMemo(() => {
     const map = new Map<string, DayRow>();
     days.forEach(day => map.set(day.date, day));
     if (todayRow) map.set(today, todayRow);
-    return [...map.values()].filter(day => !!day.spellingQuiz).sort((a, b) => b.date.localeCompare(a.date));
+    return [...map.values()].filter(day => !!day.spellingQuiz || !!day.englishQuiz).sort((a, b) => b.date.localeCompare(a.date));
   }, [days, todayRow, today]);
 
   const missedDays = useMemo(
-    () => allQuizDays.filter(day => day.date < today && !day.spellingQuiz?.submissions?.[member]),
-    [allQuizDays, today, member],
+    () => allQuizDays.filter(day => {
+      const quiz = subject === "spelling" ? day.spellingQuiz : day.englishQuiz;
+      return day.date < today && !!quiz && !quiz.submissions?.[member];
+    }),
+    [allQuizDays, today, member, subject],
   );
 
   const activeRow = selectedDate === today
     ? todayRow
     : allQuizDays.find(day => day.date === selectedDate);
-  const activeQuiz = activeRow?.spellingQuiz ?? null;
+  const activeQuiz = (subject === "spelling" ? activeRow?.spellingQuiz : activeRow?.englishQuiz) ?? null;
   const mySubmission = activeQuiz?.submissions?.[member];
 
   useEffect(() => {
     setAnswers(["", "", ""]);
-  }, [selectedDate, member, activeQuiz?.questions.map(q => q.id).join(",")]);
+  }, [selectedDate, member, subject, activeQuiz?.questions.map(q => q.id).join(",")]);
 
-  const rankStart = rankMode === "weekly" ? weeklyStart : monthRange.start;
-  const rankEnd = rankMode === "weekly" ? today : monthRange.end;
+  const rankStart = rankMode === "weekly" ? weekRange.start : monthRange.start;
+  const rankEnd = rankMode === "weekly" ? weekRange.end : monthRange.end;
   const rankKey = rankStart + "/" + rankEnd;
   useEffect(() => {
     setRankLoading(true);
@@ -176,15 +211,23 @@ export default function SpellingQuiz({
 
   const ranking = useMemo(() => {
     return people.map(p => {
-      const submissions = rankDays
+      const spellingSubmissions = rankDays
         .map(d => d.spellingQuiz?.submissions?.[p.id])
         .filter((s): s is NonNullable<typeof s> => !!s);
-      return { ...p, score: submissions.reduce((n, s) => n + s.score, 0), played: submissions.length };
+      const englishSubmissions = rankDays
+        .map(d => d.englishQuiz?.submissions?.[p.id])
+        .filter((s): s is NonNullable<typeof s> => !!s);
+      const spellingScore = spellingSubmissions.reduce((n, s) => n + s.score, 0);
+      const englishScore = englishSubmissions.reduce((n, s) => n + s.score, 0);
+      const score = rankSubject === "spelling" ? spellingScore : rankSubject === "english" ? englishScore : spellingScore + englishScore;
+      const played = rankSubject === "spelling" ? spellingSubmissions.length : rankSubject === "english" ? englishSubmissions.length : spellingSubmissions.length + englishSubmissions.length;
+      return { ...p, score, played, spellingScore, englishScore,
+        spellingPlayed: spellingSubmissions.length, englishPlayed: englishSubmissions.length };
     }).sort((a, b) =>
       b.score - a.score || b.played - a.played ||
       people.findIndex(p => p.id === a.id) - people.findIndex(p => p.id === b.id)
     );
-  }, [rankDays]);
+  }, [rankDays, rankSubject]);
 
   function selectView(next: QuizView) {
     setView(next);
@@ -195,9 +238,17 @@ export default function SpellingQuiz({
     else if (next === "history" && allQuizDays.length) setSelectedDate(allQuizDays[0].date);
   }
 
+  const questionChoices = (question: DailySpellingQuiz["questions"][number]) =>
+    subject === "spelling" ? spellingChoices(question) : question.options ?? [];
+  const questionPrompt = (question: DailySpellingQuiz["questions"][number]) =>
+    subject === "spelling" ? spellingChoicePrompt(question) : question.prompt;
+  const questionExplanation = (question: DailySpellingQuiz["questions"][number]) =>
+    subject === "spelling" ? detailedExplanation(question) : question.explanation;
+  const quizField = subject === "spelling" ? "spellingQuiz" : "englishQuiz";
+
   async function submit() {
     if (!activeQuiz || busy || mySubmission || answers.some(a => !a.trim()) ||
-        activeQuiz.questions.some(q => spellingChoices(q).length !== 2)) return;
+        activeQuiz.questions.some(q => questionChoices(q).length < 2)) return;
     setBusy(true);
     setError("");
     try {
@@ -205,7 +256,7 @@ export default function SpellingQuiz({
       await runTransaction(db, async tx => {
         const ref = doc(db, "scheduleDays", targetDate);
         const snap = await tx.get(ref);
-        const current = (snap.data() as DayRow | undefined)?.spellingQuiz;
+        const current = (snap.data() as DayRow | undefined)?.[quizField];
         if (!current || current.questions.length !== 3) throw new Error("시험 문제를 다시 불러와 주세요.");
         if (current.submissions?.[member]) throw new Error("이미 제출한 시험입니다.");
         if (activeQuiz.questions.some((q, i) => q.id !== current.questions[i]?.id))
@@ -213,7 +264,7 @@ export default function SpellingQuiz({
         const score = current.questions.reduce(
           (n, q, i) => n + Number(isCorrect(answers[i], q.answer)), 0,
         );
-        tx.update(ref, "spellingQuiz.submissions." + member, {
+        tx.update(ref, quizField + ".submissions." + member, {
           answers: answers.map(a => a.trim()),
           score,
           submittedAt: new Date().toISOString(),
@@ -228,18 +279,31 @@ export default function SpellingQuiz({
   }
 
   const viewTitle = selectedDate === today ? "오늘" : selectedDate;
-  const selectableDays = view === "missed" ? missedDays : view === "history" ? allQuizDays : [];
+  const selectableDays = view === "missed" ? missedDays : view === "history"
+    ? allQuizDays.filter(day => subject === "spelling" ? !!day.spellingQuiz : !!day.englishQuiz)
+    : [];
 
   return (
-    <div className="spelling-overlay" role="dialog" aria-modal="true" aria-label="가족 맞춤법 시험">
+    <div className="spelling-overlay" role="dialog" aria-modal="true" aria-label="가족 매일 학습">
       <div className="spelling-panel">
         <header className="spelling-head">
           <div>
-            <strong>매일 맞춤법 시험</strong>
-            <small>하루 3문제 · 못 푼 날은 나중에 이어서 응시 가능</small>
+            <strong>📚 매일 학습 대시보드</strong>
+            <small>맞춤법 3문제 + 영어 3문제 · 밀린 문제도 다시 응시 가능</small>
           </div>
           <button type="button" onClick={close} aria-label="닫기">×</button>
         </header>
+
+        <div className="spelling-summary-grid">
+          <div><small>오늘 맞춤법</small><strong>{todayQuiz?.submissions?.[member] ? `${todayQuiz.submissions[member]?.score}/3` : "미응시"}</strong></div>
+          <div><small>오늘 영어</small><strong>{todayEnglishQuiz?.submissions?.[member] ? `${todayEnglishQuiz.submissions[member]?.score}/3` : "미응시"}</strong></div>
+          <div><small>오늘 합계</small><strong>{(todayQuiz?.submissions?.[member]?.score ?? 0) + (todayEnglishQuiz?.submissions?.[member]?.score ?? 0)}/6</strong></div>
+        </div>
+
+        <nav className="spelling-subject-tabs" aria-label="과목 선택">
+          <button className={subject === "spelling" ? "active" : ""} onClick={() => { setSubject("spelling"); setAnswers(["", "", ""]); }}>✍️ 맞춤법 3문제</button>
+          <button className={subject === "english" ? "active" : ""} onClick={() => { setSubject("english"); setAnswers(["", "", ""]); }}>🔤 영어 3문제</button>
+        </nav>
 
         <nav className="spelling-view-tabs" aria-label="맞춤법 시험 보기">
           <button className={view === "today" ? "active" : ""} onClick={() => selectView("today")}>오늘</button>
@@ -254,7 +318,8 @@ export default function SpellingQuiz({
             {selectableDays.length === 0 ? (
               <span>{view === "missed" ? "밀린 문제가 없습니다." : "저장된 지난 문제가 없습니다."}</span>
             ) : selectableDays.map(day => {
-              const submission = day.spellingQuiz?.submissions?.[member];
+              const quiz = subject === "spelling" ? day.spellingQuiz : day.englishQuiz;
+              const submission = quiz?.submissions?.[member];
               return (
                 <button
                   key={day.date}
@@ -274,27 +339,31 @@ export default function SpellingQuiz({
 
         {activeQuiz && (
           <>
-            <div className="spelling-progress">
-              <span>{viewTitle} · 초등 {activeQuiz.grade}학년 · {activeQuiz.source === "ai" ? "AI 생성" : "검증 문제"}</span>
-              <strong>{mySubmission ? "완료 · " + mySubmission.score + "/3점" : "제출 전"}</strong>
+            <div className="spelling-progress-card">
+              <div><small>{subject === "spelling" ? "맞춤법" : "영어"}</small><strong>{viewTitle} 학습</strong></div>
+              <div><small>난이도</small><strong>초등 {activeQuiz.grade}학년</strong></div>
+              <div><small>상태</small><strong className={mySubmission ? "done" : "pending"}>{mySubmission ? "완료 · " + mySubmission.score + "/3" : "제출 전"}</strong></div>
             </div>
             <div className="spelling-questions">
               {activeQuiz.questions.map((q, i) => {
                 const chosen = mySubmission?.answers?.[i] ?? answers[i] ?? "";
                 const correct = mySubmission ? isCorrect(chosen, q.answer) : null;
                 return (
-                  <section className="spelling-question" key={q.id}>
+                  <section className={`spelling-question ${mySubmission ? (correct ? "result-correct" : "result-wrong") : ""}`} key={q.id}>
                     <div className="spelling-question-title">
                       <b>{i + 1}번</b>
-                      <span>객관식</span>
+                      <span>{subject === "spelling" ? "맞춤법" : "영어"} · 객관식</span>
                     </div>
                     <p>
-                      <span className="spelling-context-help">빈칸에 들어갈 알맞은 단어를 고르세요.</span>
-                      {spellingChoicePrompt(q)}
+                      <span className="spelling-context-help">{subject === "spelling" ? "빈칸에 들어갈 알맞은 단어를 고르세요." : "가장 알맞은 영어 표현을 고르세요."}</span>
+                      {questionPrompt(q)}
                     </p>
                     <div className="spelling-options">
-                      {spellingChoices(q).map(option => (
-                        <label className={chosen === option ? "selected" : ""} key={option}>
+                      {questionChoices(q).map(option => {
+                        const optionState = mySubmission
+                          ? option === q.answer ? "correct-option" : chosen === option ? "wrong-option" : ""
+                          : chosen === option ? "selected" : "";
+                        return <label className={optionState} key={option}>
                           <input
                             type="radio"
                             name={`spelling-${selectedDate}-${i}`}
@@ -303,13 +372,13 @@ export default function SpellingQuiz({
                             onChange={() => setAnswers(old => old.map((v, j) => j === i ? option : v))}
                           />
                           {option}
-                        </label>
-                      ))}
+                        </label>;
+                      })}
                     </div>
                     {mySubmission && (
                       <div className={"spelling-explanation " + (correct ? "correct" : "incorrect")}>
                         <b>{correct ? "정답" : "오답"} · 내가 고른 답: {chosen || "-"} · 정답: {q.answer}</b>
-                        <p style={{ whiteSpace: "pre-line" }}>{detailedExplanation(q)}</p>
+                        <p style={{ whiteSpace: "pre-line" }}>{questionExplanation(q)}</p>
                       </div>
                     )}
                   </section>
@@ -322,11 +391,11 @@ export default function SpellingQuiz({
                 type="button"
                 className="spelling-submit"
                 disabled={busy || loading || activeQuiz.questions.length !== 3 ||
-                  activeQuiz.questions.some(q => spellingChoices(q).length !== 2) ||
+                  activeQuiz.questions.some(q => questionChoices(q).length < 2) ||
                   answers.some(a => !a.trim())}
                 onClick={() => void submit()}
               >
-                {busy ? "제출 중…" : selectedDate === today ? "오늘 3문제 채점하고 제출" : selectedDate + " 밀린 3문제 채점하고 제출"}
+                {busy ? "제출 중…" : selectedDate === today ? `오늘 ${subject === "spelling" ? "맞춤법" : "영어"} 3문제 제출` : `${selectedDate} ${subject === "spelling" ? "맞춤법" : "영어"} 제출`}
               </button>
             )}
 
@@ -342,16 +411,37 @@ export default function SpellingQuiz({
           <p className="spelling-hint">최근 1년 안에 만들어진 시험 중 미응시 문제가 없습니다.</p>
         )}
 
-        <section className="spelling-leaderboard">
+        <section className="spelling-leaderboard dashboard-card">
           <div className="spelling-leaderboard-head">
-            <h3>가족 맞춤법 순위</h3>
+            <div><h3>🏆 가족 학습 순위</h3><small>기간과 과목을 선택해 비교할 수 있어요.</small></div>
             <div className="spelling-rank-toggle">
               <button className={rankMode === "weekly" ? "active" : ""} onClick={() => setRankMode("weekly")}>주간</button>
               <button className={rankMode === "monthly" ? "active" : ""} onClick={() => setRankMode("monthly")}>월간</button>
             </div>
           </div>
+          <div className="spelling-rank-subjects">
+            {(["total", "spelling", "english"] as RankSubject[]).map(item => (
+              <button key={item} className={rankSubject === item ? "active" : ""} onClick={() => setRankSubject(item)}>
+                {item === "total" ? "전체" : item === "spelling" ? "맞춤법" : "영어"}
+              </button>
+            ))}
+          </div>
+          {rankMode === "weekly" && (
+            <div className="spelling-period-controls">
+              <button type="button" disabled={rankWeek === weeks[weeks.length - 1]}
+                onClick={() => setRankWeek(weeks[weeks.indexOf(rankWeek) + 1])}>← 이전 주</button>
+              <label>조회 주 <select aria-label="순위 조회 주" value={rankWeek} onChange={e => setRankWeek(e.target.value)}>
+                {weeks.map((week, index) => {
+                  const range = rankingWeekRange(week, today);
+                  return <option key={week} value={week}>{index === 0 ? "이번 주" : `${range.start.slice(5)} ~ ${range.end.slice(5)}`}</option>;
+                })}
+              </select></label>
+              <button type="button" disabled={rankWeek === weeks[0]}
+                onClick={() => setRankWeek(weeks[weeks.indexOf(rankWeek) - 1])}>다음 주 →</button>
+            </div>
+          )}
           {rankMode === "monthly" && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            <div className="spelling-period-controls">
               <button type="button" disabled={rankMonth === months[months.length - 1]}
                 onClick={() => setRankMonth(months[months.indexOf(rankMonth) + 1])}>이전 달</button>
               <label>조회 월 <select aria-label="순위 조회 월" value={rankMonth}
@@ -362,18 +452,19 @@ export default function SpellingQuiz({
                 onClick={() => setRankMonth(months[months.indexOf(rankMonth) - 1])}>다음 달</button>
             </div>
           )}
-          <small>{rankStart + " ~ " + rankEnd} · 정답 1개당 1점</small>
+          <div className="spelling-rank-period">{rankStart} ~ {rankEnd}<span>정답 1개당 1점</span></div>
           {(rankLoading || rankLoadedKey !== rankKey) ? <p role="status">순위를 불러오는 중…</p> : rankError ?
             <p role="alert">{rankError}</p> : ranking.every(p => p.played === 0) ?
             <p>이 기간에는 응시 기록이 없습니다.</p> : ranking.map((p, i) => (
             <div className="spelling-rank-row" key={p.id}>
-              <span>{i + 1}위 · {p.label}</span>
-              <b>{p.score}점</b>
-              <small>{p.played}일 참여</small>
+              <span className={`rank-medal rank-${i + 1}`}>{i + 1}</span>
+              <div><b>{p.label}</b><small>{rankSubject === "total" ? `맞춤법 ${p.spellingScore} · 영어 ${p.englishScore}` : `${p.played}회 참여`}</small></div>
+              <strong>{p.score}<small>점</small></strong>
+              <div className="rank-bar"><i style={{ width: `${Math.min(100, p.score / Math.max(1, ranking[0]?.score) * 100)}%` }} /></div>
             </div>
           ))}
           <p className="spelling-hint">
-            밀린 문제를 나중에 제출해도 해당 날짜의 응시 기록으로 저장됩니다. 128개 문제은행에서 최근 30일의 출제 내용을 피해서 새 문제를 고릅니다. 지난 문제에서 해설을 다시 볼 수 있습니다.
+            밀린 문제를 제출해도 해당 날짜 점수로 기록됩니다. 맞춤법 128문항과 영어 96문항에서 최근 30일 문제를 피해서 출제합니다.
           </p>
         </section>
       </div>

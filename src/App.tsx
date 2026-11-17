@@ -1347,8 +1347,8 @@ export default function App() {
           <button
             className="spelling-top-icon"
             type="button"
-            title="맞춤법 시험"
-            aria-label="맞춤법 시험"
+            title="매일 학습"
+            aria-label="매일 학습"
             onClick={() => setSpellingOpen(true)}
           >
             🔤

@@ -10,8 +10,13 @@ for (const name of ['spellingBank', 'spellingSelection', 'spellingQuiz']) {
   const source = readFileSync(new URL('../src/' + name + '.ts', import.meta.url), 'utf8');
   writeFileSync(join(temp, name + '.ts'), source.replace(/from (['"])(\.\/spelling\w+)\1/g, 'from $1$2.ts$1'));
 }
+const englishSource = readFileSync(new URL('../src/englishQuiz.ts', import.meta.url), 'utf8')
+  .replace('import rawBank from "../shared/english-bank.json";', `import rawBank from ${JSON.stringify(new URL('../shared/english-bank.json', import.meta.url).href)} with { type: "json" };`)
+  .replaceAll('from "./spellingQuiz"', 'from "./spellingQuiz.ts"');
+writeFileSync(join(temp, 'englishQuiz.ts'), englishSource);
 const { selectSpellingQuestions, contentKeys, needsQuizUpgrade, detailedExplanation } = await import(pathToFileURL(join(temp, 'spellingSelection.ts')));
 const { spellingBank, fallbackQuiz, isCorrect } = await import(pathToFileURL(join(temp, 'spellingQuiz.ts')));
+const { englishBank, fallbackEnglishQuiz } = await import(pathToFileURL(join(temp, 'englishQuiz.ts')));
 process.on('exit', () => rmSync(temp, { recursive: true, force: true }));
 test('128 distinct reviewed sentences, choices and complete explanations', () => {
   assert.equal(spellingBank.length, 128);
@@ -21,6 +26,25 @@ test('128 distinct reviewed sentences, choices and complete explanations', () =>
     assert.ok(q.options.includes(q.answer)); assert.equal(q.prompt.split('(____)').length, 2);
     assert.ok(q.explanation.length > 100); assert.ok(q.explanation.includes('완성 문장:'));
     assert.ok(!isCorrect(q.options.find(o => o !== q.answer), q.answer));
+  }
+});
+test('96 reviewed grade-four English questions and 30-day non-repeating daily sets', () => {
+  assert.equal(englishBank.length, 96);
+  assert.equal(new Set(englishBank.map(q => q.id)).size, 96);
+  for (const q of englishBank) {
+    assert.equal(q.options.length, 3);
+    assert.ok(q.options.includes(q.answer));
+    assert.ok(q.explanation.length >= 20);
+  }
+  const history = [];
+  for (let n = 0; n < 180; n++) {
+    const date = new Date(Date.UTC(2026, 10, 17 + n)).toISOString().slice(0, 10);
+    const quiz = fallbackEnglishQuiz(date, history);
+    const recent = new Set(history.slice(-30).flatMap(item => item.questions.map(q => q.id)));
+    assert.equal(quiz.questions.length, 3);
+    assert.equal(new Set(quiz.questions.map(q => q.id)).size, 3);
+    assert.ok(quiz.questions.every(q => !recent.has(q.id)), date);
+    history.push(quiz);
   }
 });
 test('365 consecutive quizzes never repeat content within a day or the last 30 days', () => {

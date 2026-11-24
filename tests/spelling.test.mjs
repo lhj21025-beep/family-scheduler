@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 const temp = mkdtempSync(join(tmpdir(), 'spelling-'));
 writeFileSync(join(temp, 'package.json'), '{"type":"module"}');
-for (const name of ['spellingBank', 'spellingSelection', 'spellingQuiz']) {
+for (const name of ['spellingBank', 'spellingSelection', 'spellingQuiz', 'quizAnalytics']) {
   const source = readFileSync(new URL('../src/' + name + '.ts', import.meta.url), 'utf8');
   writeFileSync(join(temp, name + '.ts'), source.replace(/from (['"])(\.\/spelling\w+)\1/g, 'from $1$2.ts$1'));
 }
@@ -17,6 +17,21 @@ writeFileSync(join(temp, 'englishQuiz.ts'), englishSource);
 const { selectSpellingQuestions, contentKeys, needsQuizUpgrade, detailedExplanation } = await import(pathToFileURL(join(temp, 'spellingSelection.ts')));
 const { spellingBank, fallbackQuiz, isCorrect } = await import(pathToFileURL(join(temp, 'spellingQuiz.ts')));
 const { englishBank, fallbackEnglishQuiz } = await import(pathToFileURL(join(temp, 'englishQuiz.ts')));
+const { analyzeLearning } = await import(pathToFileURL(join(temp, 'quizAnalytics.ts')));
+test('wrong-answer analytics isolate people, subjects and distinct prompts; dedupe days and exclude unsubmitted', () => {
+  const q = { ...englishBank[0], answer: 'is', prompt: 'She (____) happy.' };
+  const day = (date, answers, qs = [q]) => ({ date, englishQuiz: { questions: qs, submissions: { son: { answers }, me: { answers: qs.map(x => x.answer) } } } });
+  const rows = [day('2026-11-20', ['am']), day('2026-11-21', ['are'], [{ ...q, id: 'new-id', options: ['are', 'is'] }]), day('2026-11-22', ['is', 'are'], [q, { ...q, prompt: 'He (____) tall.' }]), { date: '2026-11-23', englishQuiz: { questions: [q], submissions: {} } }];
+  const stats = analyzeLearning([...rows, rows[0]], 'son');
+  assert.equal(stats.answered, 4); assert.equal(stats.correct, 1); assert.equal(stats.wrong, 3);
+  assert.equal(stats.accuracy, 25); assert.equal(stats.questions.length, 2);
+  assert.equal(stats.questions[0].wrong, 2); assert.equal(stats.questions[0].attempts, 3);
+  assert.equal(stats.questions[0].lastWrongDate, '2026-11-21'); assert.equal(stats.questions[0].lastWrongAnswer, 'are');
+  assert.equal(analyzeLearning(rows, 'me').questions.length, 0);
+  assert.equal(analyzeLearning(rows, 'wife').accuracy, null);
+  assert.equal(analyzeLearning(rows, 'son', 'spelling').answered, 0);
+  assert.equal(analyzeLearning([day('2026-11-24', [''])], 'son').answered, 0);
+});
 process.on('exit', () => rmSync(temp, { recursive: true, force: true }));
 test('128 distinct reviewed sentences, choices and complete explanations', () => {
   assert.equal(spellingBank.length, 128);

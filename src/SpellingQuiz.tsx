@@ -7,6 +7,7 @@ import {
 import { ENGLISH_START_DAY, fallbackEnglishQuiz, needsEnglishQuiz } from "./englishQuiz";
 import { rankingMonths, rankingMonthRange, rankingWeeks, rankingWeekRange } from "./rankingPeriod";
 import "./spelling.css";
+import { analyzeLearning, type WrongQuestion } from "./quizAnalytics";
 
 const people: { id: SpellingMember; label: string }[] = [
   { id: "me", label: "아빠" },
@@ -48,6 +49,11 @@ export default function SpellingQuiz({
   const [view, setView] = useState<QuizView>("today");
   const [selectedDate, setSelectedDate] = useState(today);
   const [subject, setSubject] = useState<QuizSubject>("spelling");
+  const [page, setPage] = useState<'overview' | 'study' | 'review' | 'ranking'>('overview');
+  const [reviewMember, setReviewMember] = useState<SpellingMember>(member);
+  const [reviewSubject, setReviewSubject] = useState<RankSubject>('total');
+  const [historyError, setHistoryError] = useState('');
+  const [historyLoading, setHistoryLoading] = useState(true);
 
   const months = rankingMonths(SPELLING_START_DAY, today);
   const weeks = rankingWeeks(SPELLING_START_DAY, today);
@@ -76,13 +82,14 @@ export default function SpellingQuiz({
       where("date", "<=", today),
     );
     const stopHistory = onSnapshot(historyQuery, snapshot => {
+      setHistoryLoading(false); setHistoryError('');
       setDays(
         snapshot.docs
           .map(s => s.data() as DayRow)
-          .filter(row => !!row.spellingQuiz)
+          .filter(row => !!row.spellingQuiz || !!row.englishQuiz)
           .sort((a, b) => b.date.localeCompare(a.date)),
       );
-    }, err => setError("맞춤법 기록 동기화에 실패했습니다: " + err.message));
+    }, err => { setHistoryLoading(false); setHistoryError("학습 기록을 불러오지 못했습니다: " + err.message); });
 
     let cancelled = false;
     async function ensure() {
@@ -279,6 +286,13 @@ export default function SpellingQuiz({
   }
 
   const viewTitle = selectedDate === today ? "오늘" : selectedDate;
+  const familyStats = people.map(p => ({ ...p, stats: analyzeLearning(allQuizDays, p.id) }));
+  const review = analyzeLearning(allQuizDays, reviewMember, reviewSubject === 'total' ? undefined : reviewSubject);
+  const completed = Number(!!todayQuiz?.submissions?.[member]) + Number(!!todayEnglishQuiz?.submissions?.[member]);
+  const wrongCard = (q: WrongQuestion, index: number) => <details className="learning-wrong-card" key={q.key}>
+    <summary><span className="learning-number">{index + 1}</span><span><small>{q.subject === 'spelling' ? '맞춤법' : '영어'} · 최근 오답 {q.lastWrongDate}</small><b>{q.prompt}</b></span><span className="learning-wrong-count">{q.wrong}회 틀림<small>{q.attempts}회 응시 · 오답률 {Math.round(q.wrong / q.attempts * 100)}%</small><em>해설 보기 ⌄</em></span></summary>
+    <div className="learning-answer"><p className="wrong-answer">최근 고른 답 · {q.lastWrongAnswer}</p><p className="right-answer">정답 · {q.question.answer}</p><h4>왜 정답일까요?</h4><p>{q.explanation || '저장된 해설이 없습니다.'}</p></div>
+  </details>;
   const selectableDays = view === "missed" ? missedDays : view === "history"
     ? allQuizDays.filter(day => subject === "spelling" ? !!day.spellingQuiz : !!day.englishQuiz)
     : [];
@@ -289,17 +303,41 @@ export default function SpellingQuiz({
         <header className="spelling-head">
           <div>
             <strong>📚 매일 학습 대시보드</strong>
-            <small>맞춤법 3문제 + 영어 3문제 · 밀린 문제도 다시 응시 가능</small>
+            <small>{today} · {people.find(p => p.id === member)?.label}의 작은 공부 습관</small>
           </div>
           <button type="button" onClick={close} aria-label="닫기">×</button>
         </header>
 
+        <nav className="learning-navigation" aria-label="학습 메뉴">
+          {(['overview', 'study', 'review', 'ranking'] as const).map((key, i) => <button key={key} className={page === key ? 'active' : ''} aria-pressed={page === key} onClick={() => setPage(key)}>{['요약', '문제 풀기', '오답 분석', '순위'][i]}</button>)}
+        </nav>
+
+        {(page === 'overview' || page === 'study') && <>
         <div className="spelling-summary-grid">
           <div><small>오늘 맞춤법</small><strong>{todayQuiz?.submissions?.[member] ? `${todayQuiz.submissions[member]?.score}/3` : "미응시"}</strong></div>
           <div><small>오늘 영어</small><strong>{todayEnglishQuiz?.submissions?.[member] ? `${todayEnglishQuiz.submissions[member]?.score}/3` : "미응시"}</strong></div>
           <div><small>오늘 합계</small><strong>{(todayQuiz?.submissions?.[member]?.score ?? 0) + (todayEnglishQuiz?.submissions?.[member]?.score ?? 0)}/6</strong></div>
         </div>
+        </>}
 
+        {page === 'overview' && <>
+          <section className="learning-hero"><div><small>DAILY LEARNING</small><h2>매일 6문제, 차곡차곡.</h2><p>오늘 {completed}/2과목 완료 · 맞춤법과 영어를 함께 공부해요.</p><progress max={2} value={completed} aria-label="오늘 과목 완료율" /></div><button onClick={() => { setSubject(todayQuiz?.submissions?.[member] ? 'english' : 'spelling'); selectView('today'); setPage('study'); }}>{completed === 2 ? '오늘 결과 보기' : '오늘 문제 풀기'} →</button></section>
+          <div className="learning-section-head"><h3>우리 가족 학습 현황</h3><small>최근 1년 · 제출한 답안 기준</small></div>
+          {historyLoading ? <p role="status">학습 기록을 불러오는 중…</p> : historyError ? <p role="alert">{historyError}</p> : <div className="learning-family-grid">{familyStats.map(p => <button className="learning-family-card" key={p.id} onClick={() => { setReviewMember(p.id); setReviewSubject('total'); setPage('review'); }}><span className="learning-avatar">{p.label.slice(0, 1)}</span><h3>{p.label}</h3><strong>{p.stats.accuracy === null ? '—' : `${p.stats.accuracy}%`}</strong><small>정답률 · {p.stats.answered}문제 응시</small><div className="learning-mini-bar"><i style={{ width: `${p.stats.accuracy ?? 0}%` }} /></div><p>{p.stats.wrong}회 오답 · {p.stats.questions.length}개 복습 문제</p><span className="learning-top-topic">{p.stats.questions[0] ? `많이 틀린 문제: ${p.stats.questions[0].prompt}` : p.stats.answered ? '틀린 문제가 없어요.' : '아직 응시 기록이 없어요.'}</span><b className="learning-link">오답과 해설 보기 →</b></button>)}</div>}
+        </>}
+
+        {page === 'review' && <section className="learning-review">
+          <div className="learning-section-head"><h3>자주 틀린 문제</h3><small>최근 1년 · 틀린 횟수 높은 순</small></div>
+          <div className="learning-filter-row" aria-label="오답 분석 가족 선택">{people.map(p => <button key={p.id} className={reviewMember === p.id ? 'active' : ''} aria-pressed={reviewMember === p.id} onClick={() => setReviewMember(p.id)}>{p.label}</button>)}</div>
+          <div className="learning-filter-row" aria-label="오답 분석 과목 선택">{(['total', 'spelling', 'english'] as const).map((s, i) => <button key={s} className={reviewSubject === s ? 'active' : ''} aria-pressed={reviewSubject === s} onClick={() => setReviewSubject(s)}>{['전체', '맞춤법', '영어'][i]}</button>)}</div>
+          {historyLoading ? <p role="status">학습 기록을 불러오는 중…</p> : historyError ? <p role="alert">{historyError}</p> : <>
+          <div className="learning-review-metrics"><div><small>응시 문항</small><b>{review.answered}</b></div><div><small>정답률</small><b>{review.accuracy === null ? '—' : `${review.accuracy}%`}</b></div><div><small>오답 횟수</small><b>{review.wrong}</b></div></div>
+          <p className="spelling-hint">문제를 누르면 최근 고른 답과 정답·해설이 펼쳐집니다. 미응시는 오답에 포함하지 않습니다.</p>
+          {review.questions.length ? review.questions.map(wrongCard) : <div className="learning-empty">{review.answered ? '틀린 문제가 없어요. 잘하고 있어요!' : '아직 제출한 답안이 없어요.'}</div>}
+          </>}
+        </section>}
+
+        <div hidden={page !== 'study'}>
         <nav className="spelling-subject-tabs" aria-label="과목 선택">
           <button className={subject === "spelling" ? "active" : ""} onClick={() => { setSubject("spelling"); setAnswers(["", "", ""]); }}>✍️ 맞춤법 3문제</button>
           <button className={subject === "english" ? "active" : ""} onClick={() => { setSubject("english"); setAnswers(["", "", ""]); }}>🔤 영어 3문제</button>
@@ -411,7 +449,8 @@ export default function SpellingQuiz({
           <p className="spelling-hint">최근 1년 안에 만들어진 시험 중 미응시 문제가 없습니다.</p>
         )}
 
-        <section className="spelling-leaderboard dashboard-card">
+        </div>
+        <section hidden={page !== 'ranking'} className="spelling-leaderboard dashboard-card">
           <div className="spelling-leaderboard-head">
             <div><h3>🏆 가족 학습 순위</h3><small>기간과 과목을 선택해 비교할 수 있어요.</small></div>
             <div className="spelling-rank-toggle">

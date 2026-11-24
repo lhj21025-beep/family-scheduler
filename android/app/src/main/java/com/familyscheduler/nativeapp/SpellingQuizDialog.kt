@@ -28,6 +28,11 @@ class SpellingQuizDialog(
     private val spellingStartDay = LocalDate.of(2026, 10, 22)
     private var selectedDay = today
     private var subject = "spelling"
+    private var page = "overview"
+    private var reviewMember = member
+    private var reviewSubject = "total"
+    private var screenRequest = 0
+    private var cachedQuiz: Map<*, *>? = null
     private var rankingMode = "주간"
     private var rankingSubject = "전체"
     private var rankingMonth = YearMonth.from(today)
@@ -138,8 +143,8 @@ class SpellingQuizDialog(
         "꼼꼼히" to "선생님은 시험지를 (____) 살펴보셨다."
     )
 
-    private fun choicePrompt(question: Item): String {
-        if (subject == "english") return question.prompt
+    private fun choicePrompt(question: Item, course: String = subject): String {
+        if (course == "english") return question.prompt
         val original = question.prompt
         val generic = original.contains("다음 중") || original.contains("틀린 낱말을") ||
             original.contains("올바른 맞춤법을 고르세요")
@@ -167,12 +172,12 @@ class SpellingQuizDialog(
 
     fun show() {
         box.addView(text("오늘의 학습 문제를 불러오는 중…"))
-        dialog = AlertDialog.Builder(activity).setTitle("📚 매일 학습 · 맞춤법 3 + 영어 3")
-            .setView(ScrollView(activity).apply { addView(box) })
+        dialog = AlertDialog.Builder(activity).setTitle("매일 학습 대시보드")
+            .setView(ScrollView(activity).apply { setBackgroundColor(0xFFF5F7FB.toInt()); addView(box) })
             .setNegativeButton("닫기", null).create()
-        dialog.setOnDismissListener { onClosed() }
+        dialog.setOnDismissListener { screenRequest++; onClosed() }
         dialog.show()
-        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         load()
     }
 
@@ -223,7 +228,12 @@ class SpellingQuizDialog(
     }
 
     private fun render(quiz: Map<*, *>) {
+        cachedQuiz = quiz
+        screenRequest++
         box.removeAllViews()
+        addNavigation()
+        if (page == "overview" || page == "review") { renderAnalytics(); return }
+        if (page == "ranking") { renderRanking(); return }
         val questions = (quiz["questions"] as? List<*>)?.mapNotNull {
             (it as? Map<*, *>)?.let(Item::fromMap)
         }.orEmpty()
@@ -301,6 +311,9 @@ class SpellingQuizDialog(
         } else {
             box.addView(text("제출한 문제는 언제든 다시 확인할 수 있습니다.\n내가 고른 답·정답·해설을 함께 볼 수 있고, 새 시험은 최근 30일의 출제 내용을 피합니다.", 12f))
         }
+    }
+
+    private fun renderRanking() {
         box.addView(text("🏆 가족 학습 순위", 18f, true))
         val toggles = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         val subjectToggles = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
@@ -378,6 +391,120 @@ class SpellingQuizDialog(
         })
         updateMonthControls()
         loadRanking(ranks)
+    }
+
+    private fun refreshPage() { cachedQuiz?.let { render(it) } ?: load() }
+
+    private fun addNavigation() {
+        box.addView(text("$today · ${members.firstOrNull { it.first == member }?.second.orEmpty()}의 작은 공부 습관", 12f))
+        val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        listOf("overview" to "요약", "study" to "문제 풀기", "review" to "오답 분석", "ranking" to "순위").forEach { (key, label) ->
+            row.addView(navButton(label, page == key) { page = key; refreshPage() },
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(3, 0, 3, 10) })
+        }
+        box.addView(row)
+    }
+
+    private fun navButton(label: String, active: Boolean, action: () -> Unit) = Button(activity).apply {
+        text = label; textSize = 12f; isAllCaps = false; minWidth = 0; minimumWidth = 0
+        setPadding(6, 8, 6, 8)
+        background = card(if (active) 0xFF2457D6.toInt() else Color.WHITE)
+        setTextColor(if (active) Color.WHITE else 0xFF526176.toInt())
+        setOnClickListener { action() }
+    }
+
+    private fun dashboardCard(parent: LinearLayout = box, content: LinearLayout.() -> Unit) {
+        parent.addView(LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(18, 10, 18, 14); background = card(Color.WHITE); content()
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 8, 0, 8) })
+    }
+
+    private fun renderAnalytics() {
+        val request = screenRequest
+        val body = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(body)
+        body.addView(text("학습 기록을 불러오는 중…", 13f))
+        db.collection("scheduleDays").whereGreaterThanOrEqualTo("date", maxOf(spellingStartDay, today.minusDays(365)).toString())
+            .whereLessThanOrEqualTo("date", today.toString()).get().addOnSuccessListener { snapshots ->
+                if (request != screenRequest) return@addOnSuccessListener
+                body.removeAllViews()
+                val days = snapshots.documents.mapNotNull { it.data }
+                fun stats(id: String, course: String = "total") = QuizAnalytics.analyze(days, id, course) { s, q -> choicePrompt(Item.fromMap(q), s) }
+                if (page == "overview") {
+                    val current = days.firstOrNull { it["date"] == today.toString() }
+                    var completed = 0
+                    var total = 0
+                    val status = listOf("spelling" to "맞춤법", "english" to "영어").map { (course, label) ->
+                        val q = current?.get(course + "Quiz") as? Map<*, *>
+                        val mine = (q?.get("submissions") as? Map<*, *>)?.get(member) as? Map<*, *>
+                        val score = (mine?.get("score") as? Number)?.toInt() ?: 0
+                        if (mine != null) { completed++; total += score }
+                        "$label  ${if (mine != null) "$score/3" else "미응시"}"
+                    }
+                    dashboardCard(body) {
+                        addView(text("매일 6문제, 차곡차곡.", 22f, true))
+                        addView(text("오늘 $completed/2과목 완료 · 총 $total/6점", 14f, true))
+                        addView(ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).apply { max = 2; progress = completed })
+                        addView(text(status.joinToString("     "), 13f))
+                        addView(navButton(if (completed == 2) "오늘 결과 보기 →" else "오늘 문제 풀기 →", true) { page = "study"; load(today) })
+                    }
+                    body.addView(text("우리 가족 학습 현황", 18f, true))
+                    body.addView(text("최근 1년 · 제출한 답안 기준 · 가족 카드를 누르면 오답과 해설을 볼 수 있어요.", 12f))
+                    members.forEach { (id, name) ->
+                        val result = stats(id)
+                        dashboardCard(body) {
+                            addView(text("$name    정답률 ${result.accuracy?.let { "$it%" } ?: "—"}", 18f, true))
+                            addView(ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100; progress = result.accuracy ?: 0 })
+                            addView(text("${result.answered}문제 응시 · ${result.wrong}회 오답 · ${result.questions.size}개 복습 문제", 12f))
+                            addView(text(result.questions.firstOrNull()?.let { "많이 틀린 문제: ${it.prompt}" }
+                                ?: if (result.answered > 0) "틀린 문제가 없어요." else "아직 응시 기록이 없어요.", 14f))
+                            addView(navButton("$name 오답과 해설 보기 →", false) { reviewMember = id; reviewSubject = "total"; page = "review"; refreshPage() })
+                        }
+                    }
+                } else {
+                    body.addView(text("자주 틀린 문제", 20f, true))
+                    body.addView(text("최근 1년 · 틀린 횟수 높은 순 · 미응시 제외", 12f))
+                    val peopleRow = LinearLayout(activity)
+                    members.forEach { (id, name) -> peopleRow.addView(navButton(name, reviewMember == id) { reviewMember = id; refreshPage() }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(3, 3, 3, 3) }) }
+                    body.addView(peopleRow)
+                    val subjects = LinearLayout(activity)
+                    listOf("total" to "전체", "spelling" to "맞춤법", "english" to "영어").forEach { (key, name) -> subjects.addView(navButton(name, reviewSubject == key) { reviewSubject = key; refreshPage() }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(3, 3, 3, 3) }) }
+                    body.addView(subjects)
+                    val result = stats(reviewMember, reviewSubject)
+                    dashboardCard(body) {
+                        addView(text("${result.answered}문제 응시    ${result.accuracy?.let { "$it%" } ?: "—"} 정답률    ${result.wrong}회 오답", 14f, true))
+                    }
+                    body.addView(text("문제를 누르면 최근 고른 답·정답·해설이 펼쳐집니다.", 12f))
+                    if (result.questions.isEmpty()) body.addView(text(if (result.answered == 0) "아직 제출한 답안이 없어요." else "틀린 문제가 없어요. 잘하고 있어요!", 15f))
+                    result.questions.forEachIndexed { index, row ->
+                        dashboardCard(body) {
+                            val item = Item.fromMap(row.question)
+                            val course = if (row.subject == "spelling") "맞춤법" else "영어"
+                            val detail = LinearLayout(activity).apply {
+                                orientation = LinearLayout.VERTICAL; visibility = View.GONE
+                                addView(text("최근 고른 답 · ${row.lastWrongAnswer}", 14f, true).apply { setTextColor(0xFFB42318.toInt()) })
+                                addView(text("정답 · ${item.answer}", 14f, true).apply { setTextColor(0xFF166534.toInt()) })
+                                addView(text(if (row.subject == "spelling") SpellingContent.explanation(item.answer, item.explanation) else item.explanation.ifBlank { "저장된 해설이 없습니다." }, 14f))
+                            }
+                            val toggle = Button(activity).apply {
+                                text = "${index + 1}. $course · ${row.wrong}회 틀림 / ${row.attempts}회 응시\n${row.prompt}\n최근 오답 ${row.lastWrongDate} · 해설 보기 ⌄"
+                                textSize = 14f; isAllCaps = false; gravity = android.view.Gravity.START or android.view.Gravity.CENTER_VERTICAL
+                                background = card(Color.WHITE); setPadding(12, 12, 12, 12)
+                                setTextColor(0xFF172033.toInt())
+                                setOnClickListener {
+                                    detail.visibility = if (detail.visibility == View.GONE) View.VISIBLE else View.GONE
+                                    text = "${index + 1}. $course · ${row.wrong}회 틀림 / ${row.attempts}회 응시\n${row.prompt}\n최근 오답 ${row.lastWrongDate} · ${if (detail.visibility == View.VISIBLE) "해설 접기 ⌃" else "해설 보기 ⌄"}"
+                                }
+                            }
+                            addView(toggle); addView(detail)
+                        }
+                    }
+                }
+            }.addOnFailureListener { e ->
+                if (request != screenRequest) return@addOnFailureListener
+                body.removeAllViews(); body.addView(text("학습 기록을 불러오지 못했습니다: ${e.message}", 13f))
+                body.addView(navButton("다시 시도", true) { refreshPage() })
+            }
     }
 
     private fun addSubjectControls() {
